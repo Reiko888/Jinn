@@ -1,18 +1,14 @@
 ﻿using GameNetcodeStuff;
-using Obake;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.Timeline;
-using UnityEngine.UIElements;
 
 namespace Obake
 {
     class ObakeAI : EnemyAI
     {
-
         System.Random enemyRandom = null!;
 
         public float minDistance;
@@ -25,17 +21,35 @@ namespace Obake
 
         public Material[] thisMaterial;
 
-        public GameObject VoidFace;
+        public GameObject BloodParticles;
+
+        public GameObject TeleportSwirl;
+
+        private GameObject currentNetworkSwirl;
 
         private bool hasHeardGramophone = false;
 
-        //private float footstepTimer = 0f;
+        private Vector3 lastPosition;
 
         private bool hasLOS;
 
         public AISearchRoutine searchRoutine;
 
         public float chaseTimer = 0f;
+
+        private bool isPreparingTeleport = false;
+
+        private float teleportWarningTimer = 0f;
+
+        private Vector3 pendingTeleportPosition;
+
+        private PlayerControllerB pendingTeleportTarget;
+
+        public float teleportWarningDelay = 6f;
+
+        public float maxDistanceAfterWarning = 18f;
+
+        public float minDistanceAfterWarning = 5f;
 
 
         private float gramoDash;
@@ -44,9 +58,11 @@ namespace Obake
 
         private float timeSinceSeen;
 
-        private float manifestAnimCooldown;
+        private float timesinceHearingGramophone;
 
-        public AudioClip[] customFootstepSounds;
+        private float tpRollTimer;
+
+        private float continuousChaseTimer = 0f;
 
         public AudioSource movementAudio;
 
@@ -56,9 +72,16 @@ namespace Obake
 
         public AudioClip swingSFX;
 
-        public AudioClip hitSFX;
+        public AudioClip[] teleportSFX;
 
-        public AudioSource CreatureMiscSFX;
+        public AudioClip chargeUpTPSFX;
+
+        public ParticleSystem mistParticles;
+
+        public ParticleSystem decayingMatterParticles;
+
+        private bool isStunned = false;
+
 
         [Conditional("DEBUG")]
         void LogIfDebugBuild(string text)
@@ -83,6 +106,8 @@ namespace Obake
         {
             base.Start();
             thisMaterial = skin.materials;
+            base.GetAINodes();
+
             enemyRandom = new System.Random(StartOfRound.Instance.randomMapSeed + thisEnemyIndex);
             if (creatureVoice != null)
             {
@@ -92,6 +117,25 @@ namespace Obake
             LogIfDebugBuild("Obake Spawned");
             SpawnCursedGramophoneLocally();
         }
+
+        private void OnEnable()
+        {
+            ObakeEventManager.OnShipLeft += HandleShipLeft;
+        }
+
+        private void OnDisable()
+        {
+            ObakeEventManager.OnShipLeft -= HandleShipLeft;
+        }
+
+        private void HandleShipLeft()
+        {
+            Plugin.Logger.LogInfo("Ship is leaving! Cleaning up");
+
+            if (creatureVoice != null) creatureVoice.Stop();
+            KillEnemy(true);
+        }
+
 
         public void SpawnCursedGramophoneLocally()
         {
@@ -185,125 +229,99 @@ namespace Obake
         public override void Update()
         {
             base.Update();
+            timeSinceLastAttack += Time.deltaTime;
             SetVisibility();
             if (isEnemyDead) return;
             if (StartOfRound.Instance.allPlayersDead)
             {
                 return;
             }
+
             if (!hasLOS && chaseTimer > 0f)
             {
                 chaseTimer -= Time.deltaTime;
             }
             if (attackCooldown > 0f) attackCooldown -= Time.deltaTime;
 
-            timeSinceLastAttack += Time.deltaTime;
-
             if (!base.IsOwner)
             {
                 return;
             }
+
             timeSinceSeen += Time.deltaTime;
-            manifestAnimCooldown += Time.deltaTime;
+            timesinceHearingGramophone += Time.deltaTime;
+
+            if (isPreparingTeleport)
+            {
+                teleportWarningTimer -= Time.deltaTime;
+                if (teleportWarningTimer <= 0f)
+                {
+                    ExecuteDelayedTeleport();
+                }
+            }
 
             if (isEnemyDead)
             {
                 agent.speed = 0f;
             }
-            else if (!isEnemyDead)
+            else
             {
-                if (timeSinceSeen > 3f)
+                if (hasLOS && targetPlayer != null)
                 {
-                    agent.speed = 6f;
+                    continuousChaseTimer += Time.deltaTime;
+
+                    if (continuousChaseTimer >= 5f && !isPreparingTeleport)
+                    {
+                        tpRollTimer += Time.deltaTime;
+
+                        if (tpRollTimer >= 5f)
+                        {
+                            tpRollTimer = 0f;
+
+                            if (UnityEngine.Random.value <= 0.80f)
+                            {
+                                LogIfDebugBuild("Teleport has been accepted Teleporting...");
+                                TpNearestNode(targetPlayer);
+                            }
+                            else
+                            {
+                                LogIfDebugBuild("Teleport denied. Will try again in 5 seconds.");
+                            }
+                        }
+                    }
                 }
                 else
                 {
-                    agent.speed = 5f;
+                    continuousChaseTimer = 0f;
+                    tpRollTimer = 0f;
                 }
-                if (timeSinceSeen <= 1f && manifestAnimCooldown >= 20f)
+                if (hasHeardGramophone)
                 {
-                    manifestAnimCooldown = 0f;
-                    DoManifestOnOwnerClient();
+                    agent.speed = gramoDash;
+
+                    if (timesinceHearingGramophone > 12f)
+                    {
+                        hasHeardGramophone = false;
+                        LogIfDebugBuild("Gramophone timeout reached");
+                    }
                 }
-                if (hasHeardGramophone==true)
-                {
-                    agent.speed= gramoDash;
-                }
-                if (timeSinceLastAttack < 2f)
+                else if (timeSinceLastAttack < 2f)
                 {
                     agent.speed = 2f;
                 }
+                else
+                {
+                    if (timeSinceSeen > 3f)
+                    {
+                        agent.speed = 6f;
+                    }
+                    else
+                    {
+                        agent.speed = 5f;
+                    }
+                }
             }
         }
-
-        private void Manifesting()
-        {
-            StartCoroutine(ManifestFX());
-            creatureVoice.PlayOneShot(emergeSFX);
-            creatureVoice.PlayOneShot(laughSFX);
-            creatureAnimator.SetTrigger("isManifesting");
-        }
-
-        IEnumerator ManifestFX()
-        {
-            yield return new WaitForSeconds(1f);
-            if (VoidFace != null) VoidFace.SetActive(true);
-            yield return new WaitForSeconds(1f);
-            if (VoidFace != null) VoidFace.SetActive(false);
-        }
-
-        private void DoManifestOnOwnerClient()
-        {
-            Manifesting();
-
-            if (base.IsServer)
-            {
-                ManifestClientRpc();
-            }
-            else
-            {
-                DoManifestServerRpc();
-            }
-        }
-
-        [ServerRpc]
-        public void DoManifestServerRpc()
-        {
-            ManifestClientRpc();
-        }
-
-        [ClientRpc]
-        public void ManifestClientRpc()
-        {
-            if (!base.IsOwner)
-            {
-                Manifesting();
-            }
-        }
-
-        //private void HandleCustomFootsteps()
-        //{
-        //    float distanceMoved = Vector3.Distance(transform.position, lastPosition);
-        //    if (distanceMoved > 0.02f)
-        //    {
-        //        footstepTimer += Time.deltaTime;
-        //        if (footstepTimer > 0.6f)
-        //        {
-        //            footstepTimer = 0f;
-        //            if (customFootstepSounds != null && customFootstepSounds.Length > 0 && movementAudio != null)
-        //            {
-        //                int randomIndex = UnityEngine.Random.Range(0, customFootstepSounds.Length);
-        //                movementAudio.pitch = UnityEngine.Random.Range(0.9f, 1.1f);
-        //                movementAudio.PlayOneShot(customFootstepSounds[randomIndex], 1f);
-        //            }
-        //        }
-        //    }
-        //    else
-        //    {
-        //        footstepTimer = 0f;
-        //    }
-        //    lastPosition = transform.position;
-        //}
 
         public override void DoAIInterval ()
         {
@@ -344,30 +362,219 @@ namespace Obake
             }
         }
 
+        private void TpNearestNode(PlayerControllerB targetPlayer)
+        {
+            if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
+
+            List<GameObject> validNodes = new List<GameObject>();
+            float initialTeleportRadius = 10f;
+
+            foreach (GameObject node in allAINodes)
+            {
+                if (node == null) continue;
+
+                if (Vector3.Distance(node.transform.position, targetPlayer.transform.position) <= initialTeleportRadius)
+                {
+                    validNodes.Add(node);
+                }
+            }
+
+            if (validNodes.Count > 0)
+            {
+                GameObject chosenNode = validNodes[enemyRandom.Next(0, validNodes.Count)];
+
+                pendingTeleportPosition = chosenNode.transform.position;
+                pendingTeleportTarget = targetPlayer;
+                teleportWarningTimer = teleportWarningDelay;
+                isPreparingTeleport = true;
+
+                if (movementAudio != null && chargeUpTPSFX != null)
+                {
+                    movementAudio.PlayOneShot(chargeUpTPSFX, 0.8f);
+                }
+
+                LogIfDebugBuild($"Found {validNodes.Count} nodes. Spawning warning swirl and starting timer");
+
+                if (IsServer)
+                {
+                    LogIfDebugBuild("--- DEBUG: STARTING SWIRL SPAWN SEQUENCE ---");
+
+                    if (TeleportSwirl == null)
+                    {
+                        LogIfDebugBuild("DEBUG ERROR: TeleportSwirl prefab is NULL! The slot in the inspector/script is empty.");
+                    }
+                    else
+                    {
+                        LogIfDebugBuild($"DEBUG: TeleportSwirl prefab found. Name: {TeleportSwirl.name}");
+                        Vector3 spawnPos = pendingTeleportPosition + (Vector3.up * 1.5f);
+                        LogIfDebugBuild($"DEBUG: Attempting to Instantiate at {spawnPos}");
+
+                        currentNetworkSwirl = Instantiate(TeleportSwirl, spawnPos, Quaternion.identity);
+
+                        if (currentNetworkSwirl == null)
+                        {
+                            LogIfDebugBuild("DEBUG ERROR: Instantiate returned null! Unity failed to create the object.");
+                        }
+                        else
+                        {
+                            LogIfDebugBuild("DEBUG: Instantiate successful. Checking for NetworkObject component...");
+                            NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+
+                            if (netObj == null)
+                            {
+                                LogIfDebugBuild("DEBUG ERROR: No NetworkObject component found on the spawned swirl!");
+                            }
+                            else
+                            {
+                                LogIfDebugBuild($"DEBUG: NetworkObject found. IsSpawned before: {netObj.IsSpawned}. Calling Spawn()...");
+
+                                try
+                                {
+                                    netObj.Spawn(true);
+                                    LogIfDebugBuild($"DEBUG: Spawn called successfully. IsSpawned after: {netObj.IsSpawned}");
+                                }
+                                catch (System.Exception ex)
+                                {
+                                    LogIfDebugBuild($"DEBUG CRITICAL ERROR: Netcode threw an exception during Spawn()! {ex.Message}\n{ex.StackTrace}");
+                                }
+                            }
+                        }
+                    }
+                    LogIfDebugBuild("--- DEBUG: END SWIRL SPAWN SEQUENCE ---");
+                }
+            }
+            else
+            {
+                LogIfDebugBuild("No AI nodes found within 10 units. Teleport cancelled");
+            }
+        }
+
+        private void ExecuteDelayedTeleport()
+        {
+            isPreparingTeleport = false;
+            tpRollTimer = 0f;
+
+            if (IsServer)
+            {
+                if (currentNetworkSwirl != null)
+                {
+                    currentNetworkSwirl.GetComponent<NetworkObject>().Despawn(true);
+                    currentNetworkSwirl = null;
+                }
+            }
+
+            if (pendingTeleportTarget == null || pendingTeleportTarget.isPlayerDead)
+            {
+                LogIfDebugBuild("Target lost, no tp for me :(");
+                return;
+            }
+            float currentDistance = Vector3.Distance(pendingTeleportPosition, pendingTeleportTarget.transform.position);
+
+            if (currentDistance <= maxDistanceAfterWarning && currentDistance > minDistanceAfterWarning)
+            {
+                LogIfDebugBuild($"Player is {currentDistance} units away (Cutoff is {maxDistanceAfterWarning}). I am tp'ing!!");
+                if (IsServer)
+                {
+                    TeleportObakeClientRpc(pendingTeleportPosition);
+                }
+                else
+                {
+                    TeleportObakeServerRpc(pendingTeleportPosition);
+                }
+            }
+            else
+            {
+                LogIfDebugBuild($"Player too far or too close to TP smoke! They are {currentDistance} units away. Teleport cancelled.");
+            }
+        }
+
+        private void TeleportObakeLocally(Vector3 newPos)
+        {
+            agent.enabled = false;
+            transform.position = newPos;
+            agent.enabled = true;
+            if (agent.isOnNavMesh)
+            {
+                agent.Warp(newPos);
+            }
+            serverPosition = newPos;
+
+            if (creatureSFX != null && teleportSFX != null)
+            {
+                var clip = teleportSFX.Length > 0 ? teleportSFX[enemyRandom.Next(teleportSFX.Length)] : null;
+                if (clip != null)
+                {
+                    creatureSFX.PlayOneShot(clip);
+                }
+            }
+
+            if (creatureSFX != null && laughSFX != null)
+            {
+                creatureSFX.PlayOneShot(laughSFX);
+            }
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void TeleportObakeServerRpc(Vector3 newPos)
+        {
+            TeleportObakeClientRpc(newPos);
+        }
+
+        [ClientRpc]
+        public void TeleportObakeClientRpc(Vector3 newPos)
+        {
+            TeleportObakeLocally(newPos);
+        }
+
         private void SetVisibility()
         {
             float num = Vector3.Distance(StartOfRound.Instance.audioListener.transform.position, base.transform.position + Vector3.up * 0.7f);
+
             float alphaCutoff = (num - minDistance) / (maxDistance - minDistance);
+
+            float clampedCutoff = Mathf.Clamp(alphaCutoff, 0.01f, 1f);
 
             for (int i = 0; i < thisMaterial.Length; i++)
             {
                 if (thisMaterial[i] != null)
                 {
-                    thisMaterial[i].SetFloat("_AlphaCutoff", alphaCutoff);
+                    thisMaterial[i].SetFloat("_AlphaCutoff", clampedCutoff);
                 }
             }
+
+            FadeTransparentParticle(mistParticles, clampedCutoff);
+            FadeTransparentParticle(decayingMatterParticles, clampedCutoff);
+
             PlayerControllerB localPlayerController = GameNetworkManager.Instance.localPlayerController;
             if (!localPlayerController.isPlayerDead && localPlayerController != null && num < 15f && num > maxDistance + 2f)
             {
                 localPlayerController.IncreaseFearLevelOverTime(0.37f, 0.25f);
             }
+
+            if (stunNormalizedTimer>0f)
         }
 
+        private void FadeTransparentParticle(ParticleSystem ps, float fadeValue)
+        {
+            if (ps == null) return;
+            ParticleSystemRenderer psRenderer = ps.GetComponent<ParticleSystemRenderer>();
+
+            if (psRenderer != null && psRenderer.material != null)
+            {
+                if (psRenderer.material.HasProperty("_Color"))
+                {
+                    Color matColor = psRenderer.material.GetColor("_Color");
+                    matColor.a = 1f - fadeValue;
+                    psRenderer.material.SetColor("_Color", matColor);
+                }
+            }
+        }
 
         public void HearGramophone(Vector3 gramophonePosition)
         {
             if (hasHeardGramophone) return;
             hasHeardGramophone = true;
+            timesinceHearingGramophone = 0f;
             gramoDash = agent.speed * 1.5f;
             LogIfDebugBuild("The Obake hears the Gramophone!");
 
@@ -380,39 +587,51 @@ namespace Obake
             LogIfDebugBuild("Gramophone fully wound. Obake defeated!");
 
             SpawnRapierLocally();
-
-            KillEnemyOnOwnerClient(true);
+            base.KillEnemy(true);
         }
 
         public override void OnCollideWithPlayer(Collider other)
         {
             base.OnCollideWithPlayer(other);
-            if (!(timeSinceLastAttack < 0.65f))
+            if (!(timeSinceLastAttack < 2f))
             {
                 PlayerControllerB playerControllerB = MeetsStandardPlayerCollisionConditions(other);
                 if (playerControllerB != null)
                 {
                     timeSinceLastAttack = 0f;
                     playerControllerB.DamagePlayer(40, hasDamageSFX: true, callRPC: true, CauseOfDeath.Stabbing);
-                    HitPlayerServerRpc((int)GameNetworkManager.Instance.localPlayerController.playerClientId);
+                    HitPlayerServerRpc();
                     GameNetworkManager.Instance.localPlayerController.JumpToFearLevel(1f);
                 }
             }
-
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void HitPlayerServerRpc(int playerId)
+        public void HitPlayerServerRpc()
         {
-            HitPlayerClientRpc(playerId);
+            HitPlayerClientRpc();
         }
 
         [ClientRpc]
-        public void HitPlayerClientRpc(int playerId)
+        public void HitPlayerClientRpc()
         {
-            timeSinceLastAttack = 0f;
-            creatureAnimator.SetTrigger("isAttacking");
-            creatureVoice.PlayOneShot(swingSFX);
+            if (!isEnemyDead)
+            {
+                creatureAnimator.SetTrigger("isAttacking");
+                if (BloodParticles != null)
+                {
+                    ParticleSystem particles = BloodParticles.GetComponent<ParticleSystem>();
+                    if (particles != null)
+                    {
+                        particles.Play();
+                    }
+                }
+                creatureSFX.PlayOneShot(swingSFX);
+            }
+            if (base.IsOwner)
+            {
+                agent.speed = 2f;
+            }
         }
     }
 }

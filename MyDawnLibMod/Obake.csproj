@@ -22,6 +22,12 @@
 	</PropertyGroup>
 
 	<PropertyGroup>
+		<NetcodePatcherUnityVersion>2022.3.62</NetcodePatcherUnityVersion>
+		<NetcodePatcherNetcodeVersion>1.12.2</NetcodePatcherNetcodeVersion>
+		<NetcodePatcherTransportVersion>1.0.0</NetcodePatcherTransportVersion>
+	</PropertyGroup>
+
+	<PropertyGroup>
 		<RestoreAdditionalProjectSources>
 			https://api.nuget.org/v3/index.json;
 			https://nuget.bepinex.dev/v3/index.json
@@ -40,14 +46,14 @@
 
 	<ItemGroup>
 		<PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
+		<PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" />
 		<PackageReference Include="BepInEx.Core" Version="5.*" />
 		<PackageReference Include="BepInEx.PluginInfoProps" Version="1.*" />
-
+		<PackageReference Include="Evaisa.NetcodePatcher.MSBuild" Version="4.*" PrivateAssets="all" />
 		<PackageReference Include="UnityEngine.Modules" Version="2022.3.62" IncludeAssets="compile" />
 
 		<PackageReference Include="TeamXiaolan.DawnLib" Version="0.9.12" />
 		<PackageReference Include="TeamXiaolan.DawnLib.DuskMod" Version="0.9.12" />
-		<PackageReference Include="Evaisa.NetcodePatcher.MSBuild" Version="4.*" PrivateAssets="all" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
@@ -61,7 +67,12 @@
 	<ItemGroup Condition="$(CI) == 'true'">
 		<PackageReference Include="LethalCompany.GameLibs.Steam" Version="81.0.0-ngd.0" Publicize="true" PrivateAssets="all" />
 	</ItemGroup>
-	<Target Name="PackThunderstore" DependsOnTargets="NetcodePatch" AfterTargets="PostBuildEvent" Condition="$(Configuration) == 'Release'">
+
+	<Target Name="NetcodePatch" AfterTargets="PostBuildEvent">
+		<Exec Command="dotnet netcode-patch -uv 2022.3.62 -nv 1.12.0 -tv 1.0.0 &quot;$(TargetPath)&quot; @(ReferencePathWithRefAssemblies->'&quot;%(Identity)&quot;', ' ')"/>
+	</Target>
+
+	<Target Name="PackThunderstore" AfterTargets="PostBuildEvent" Condition="$(Configuration) == 'Release'">
 		<Exec Command="dotnet tcli build --config-path &quot;$(ProjectDir)Thunderstore/thunderstore.toml&quot; --package-version $(Version) --package-name $(Product) --package-namespace $(ThunderstoreTeam)"  />
 	</Target>
 </Project>
