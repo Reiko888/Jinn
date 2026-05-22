@@ -33,8 +33,6 @@ namespace Obake
 
         private bool hasLOS;
 
-        public AISearchRoutine searchRoutine;
-
         public float chaseTimer = 0f;
 
         private bool isPreparingTeleport = false;
@@ -45,12 +43,21 @@ namespace Obake
 
         private PlayerControllerB pendingTeleportTarget;
 
+        private bool hasAttemptedLastDitchTp = false;
+
         public float teleportWarningDelay = 6f;
 
         public float maxDistanceAfterWarning = 18f;
 
-        public float minDistanceAfterWarning = 5f;
+        public float minDistanceAfterWarning = 8f;
 
+        private bool isFlickeringLights = false;
+
+        private bool wasBeingBurned = false;
+
+        public bool isCurrentlyBurning = false;
+
+        public Renderer[] rapierRenderers;
 
         private float gramoDash;
 
@@ -64,6 +71,10 @@ namespace Obake
 
         private float continuousChaseTimer = 0f;
 
+        public float teleportCooldown = 15f;
+
+        private float teleportCooldownTimer = 0f;
+
         public AudioSource movementAudio;
 
         public AudioClip emergeSFX;
@@ -76,11 +87,12 @@ namespace Obake
 
         public AudioClip chargeUpTPSFX;
 
+        public AudioClip creaturePainSFX; 
+
         public ParticleSystem mistParticles;
 
         public ParticleSystem decayingMatterParticles;
 
-        private bool isStunned = false;
 
 
         [Conditional("DEBUG")]
@@ -105,7 +117,23 @@ namespace Obake
         public override void Start()
         {
             base.Start();
-            thisMaterial = skin.materials;
+            List<Material> combinedMaterials = new List<Material>();
+
+            if (skin != null)
+            {
+                combinedMaterials.AddRange(skin.materials);
+            }
+            if (rapierRenderers != null)
+            {
+                foreach (Renderer r in rapierRenderers)
+                {
+                    if (r != null)
+                    {
+                        combinedMaterials.AddRange(r.materials);
+                    }
+                }
+            }
+            thisMaterial = combinedMaterials.ToArray();
             base.GetAINodes();
 
             enemyRandom = new System.Random(StartOfRound.Instance.randomMapSeed + thisEnemyIndex);
@@ -156,22 +184,53 @@ namespace Obake
                 return;
             }
 
-            RandomScrapSpawn[] allScrapSpawns = FindObjectsOfType<RandomScrapSpawn>();
-            Vector3 rawSpawnPos = transform.position + (Vector3.up * 1.5f);
+            Vector3 safeSpawnPos = transform.position + (Vector3.up * 1.5f);
+            bool foundValidSpawn = false;
 
-            if (allScrapSpawns != null && allScrapSpawns.Length > 0)
+            RandomScrapSpawn[] allScrapSpawns = FindObjectsOfType<RandomScrapSpawn>();
+
+            if (allScrapSpawns != null && allScrapSpawns.Length > 0 && allAINodes != null && allAINodes.Length > 0)
             {
-                RandomScrapSpawn chosenNode = allScrapSpawns[enemyRandom.Next(0, allScrapSpawns.Length)];
-                rawSpawnPos = chosenNode.transform.position;
+                for (int i = 0; i < 15; i++)
+                {
+                    RandomScrapSpawn chosenScrapNode = allScrapSpawns[enemyRandom.Next(0, allScrapSpawns.Length)];
+
+                    bool nearAINode = false;
+                    foreach (GameObject aiNode in allAINodes)
+                    {
+                        if (aiNode != null && Vector3.Distance(chosenScrapNode.transform.position, aiNode.transform.position) <= 15f)
+                        {
+                            nearAINode = true;
+                            break;
+                        }
+                    }
+
+                    if (nearAINode)
+                    {
+                        Vector3 testPos = RoundManager.Instance.GetNavMeshPosition(chosenScrapNode.transform.position, RoundManager.Instance.navHit, 3f, -1);
+
+                        if (RoundManager.Instance.GotNavMeshPositionResult)
+                        {
+                            safeSpawnPos = testPos;
+                            foundValidSpawn = true;
+                            break; 
+                        }
+                    }
+                }
             }
 
-            Vector3 safeSpawnPos = RoundManager.Instance.GetNavMeshPosition(rawSpawnPos, RoundManager.Instance.navHit, 5f, -1);
-            if (!RoundManager.Instance.GotNavMeshPositionResult)
+            if (!foundValidSpawn && allAINodes != null && allAINodes.Length > 0)
             {
-                safeSpawnPos = rawSpawnPos;
+                GameObject fallbackNode = allAINodes[enemyRandom.Next(0, allAINodes.Length)];
+                if (fallbackNode != null)
+                {
+                    safeSpawnPos = fallbackNode.transform.position;
+                    LogIfDebugBuild("Failed to find valid scrap node. Falling back to an AI Node spawn to prevent pit spawn.");
+                }
             }
 
             safeSpawnPos.y += 1.0f;
+
             GameObject gramophoneDrop = Instantiate(gramophoneItem.spawnPrefab, safeSpawnPos, Quaternion.identity, RoundManager.Instance.spawnedScrapContainer);
             GrabbableObject gramophoneGrabbable = gramophoneDrop.GetComponent<GrabbableObject>();
 
@@ -186,7 +245,7 @@ namespace Obake
             gramophoneGrabbable.grabbable = false;
             gramophoneDrop.layer = LayerMask.NameToLayer("Default");
 
-            LogIfDebugBuild("Dropped CursedGramophone item at random node");
+            LogIfDebugBuild("Dropped CursedGramophone item at valid, accessible node!");
         }
 
         public void SpawnRapierLocally()
@@ -230,12 +289,17 @@ namespace Obake
         {
             base.Update();
             timeSinceLastAttack += Time.deltaTime;
-            SetVisibility();
-            if (isEnemyDead) return;
-            if (StartOfRound.Instance.allPlayersDead)
+            if (isCurrentlyBurning)
             {
-                return;
+                stunNormalizedTimer = 1f;
             }
+
+            SetVisibility();
+
+            DrainLocalFlashlightBattery();
+
+            if (isEnemyDead) return;
+            if (StartOfRound.Instance.allPlayersDead) return;
 
             if (!hasLOS && chaseTimer > 0f)
             {
@@ -243,13 +307,36 @@ namespace Obake
             }
             if (attackCooldown > 0f) attackCooldown -= Time.deltaTime;
 
-            if (!base.IsOwner)
-            {
-                return;
-            }
+            if (!base.IsOwner) return;
 
             timeSinceSeen += Time.deltaTime;
             timesinceHearingGramophone += Time.deltaTime;
+
+            bool isBurnedNow = IsBeingBurnedByFlashlight();
+
+            if (isBurnedNow)
+            {
+                agent.speed = 1f; 
+
+                if (!wasBeingBurned)
+                {
+                    wasBeingBurned = true;
+                    SetBurningStateClientRpc(true);
+                }
+            }
+            else
+            {
+                if (wasBeingBurned)
+                {
+                    wasBeingBurned = false;
+                    SetBurningStateClientRpc(false);
+                }
+            }
+
+            if (stunNormalizedTimer > 0f && !isFlickeringLights && !isEnemyDead)
+            {
+                StartCoroutine(FlickerLightsDuringStun());
+            }
 
             if (isPreparingTeleport)
             {
@@ -260,14 +347,20 @@ namespace Obake
                 }
             }
 
+            //if(hasLOS==true)
+            //{
+            //    creatureVoice.Pitch(0.5f);
+            //}
+
             if (isEnemyDead)
             {
                 agent.speed = 0f;
             }
             else
             {
-                if (hasLOS && targetPlayer != null)
+                if (targetPlayer != null)
                 {
+
                     continuousChaseTimer += Time.deltaTime;
 
                     if (continuousChaseTimer >= 5f && !isPreparingTeleport)
@@ -280,7 +373,7 @@ namespace Obake
 
                             if (UnityEngine.Random.value <= 0.80f)
                             {
-                                LogIfDebugBuild("Teleport has been accepted Teleporting...");
+                                LogIfDebugBuild("Teleport has been accepted");
                                 TpNearestNode(targetPlayer);
                             }
                             else
@@ -313,7 +406,7 @@ namespace Obake
                 {
                     if (timeSinceSeen > 3f)
                     {
-                        agent.speed = 6f;
+                        agent.speed = 7f;
                     }
                     else
                     {
@@ -323,43 +416,250 @@ namespace Obake
             }
         }
 
-        public override void DoAIInterval ()
+        public override void DoAIInterval()
         {
             base.DoAIInterval();
-            if (isEnemyDead || StartOfRound.Instance.allPlayersDead)
+            if (isEnemyDead || StartOfRound.Instance.allPlayersDead) return;
+
+            if (targetPlayer != null)
             {
+                if (CheckLineOfSightForPosition(targetPlayer.gameplayCamera.transform.position, 120f, 60))
+                {
+                    hasLOS = true;
+                    timeSinceSeen = 0f;
+                    chaseTimer = 10f;
+                    lastPosition = targetPlayer.transform.position;
+                    hasAttemptedLastDitchTp = false; 
+
+                    if (currentSearch != null && currentSearch.inProgress) StopSearch(currentSearch);
+                    SetMovingTowardsTargetPlayer(targetPlayer);
+                }
+                else
+                {
+                    hasLOS = false;
+
+                    if (chaseTimer <= 0f)
+                    {
+                        CheckAndFireLastDitchTeleport();
+
+                        targetPlayer = null;
+                        if (currentSearch == null || !currentSearch.inProgress) StartSearch(base.transform.position);
+                    }
+                    else
+                    {
+                        SetDestinationToPosition(lastPosition);
+
+                        if (Vector3.Distance(transform.position, lastPosition) <= 2f)
+                        {
+                            CheckAndFireLastDitchTeleport();
+                            chaseTimer = 0f;
+                        }
+                        else if (chaseTimer <= 7f)
+                        {
+                            CheckAndFireLastDitchTeleport();
+                        }
+                    }
+                }
+            }
+            else
+            {
+                hasLOS = false;
+
+                if (TargetClosestPlayer(5f, requireLineOfSight: true, 120f))
+                {
+                    hasLOS = true;
+                    timeSinceSeen = 0f;
+                    chaseTimer = 10f;
+                    lastPosition = targetPlayer.transform.position;
+                    hasAttemptedLastDitchTp = false;
+
+                    if (currentSearch != null && currentSearch.inProgress) StopSearch(currentSearch);
+                    SetMovingTowardsTargetPlayer(targetPlayer);
+                }
+                else if (currentSearch == null || !currentSearch.inProgress)
+                {
+                    StartSearch(base.transform.position);
+                }
+            }
+        }
+
+        private void CheckAndFireLastDitchTeleport()
+        {
+            if (!hasAttemptedLastDitchTp && !isPreparingTeleport && targetPlayer != null)
+            {
+                hasAttemptedLastDitchTp = true;
+
+                if (UnityEngine.Random.value <= 0.75f)
+                {
+                    LogIfDebugBuild("Target lost! Attempting last ditch teleport to cut them off.");
+                    TpToCutoffNode(targetPlayer);
+                }
+            }
+        }
+
+        private void TpToCutoffNode(PlayerControllerB targetPlayer)
+        {
+            if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
+
+            Vector3 playerVelocity = targetPlayer.thisController.velocity;
+
+            if (playerVelocity.sqrMagnitude < 1f)
+            {
+                LogIfDebugBuild("Player is standing still. Falling back to normal LDTp.");
+                TpNearestNode(targetPlayer);
                 return;
             }
 
-            PlayerControllerB previousTarget = targetPlayer;
+            Vector3 predictedPosition = targetPlayer.transform.position + (playerVelocity.normalized * 15f);
 
-            PlayerControllerB playerControllerB = targetPlayer;
-            if (TargetClosestPlayer(5f, requireLineOfSight: true, 120f))
+            List<GameObject> validNodes = new List<GameObject>();
+            float cutoffRadius = 12f; 
+
+            foreach (GameObject node in allAINodes)
             {
-                hasLOS = true;
-                timeSinceSeen = 0f;
-                chaseTimer = 10f;
-                if (searchRoutine.inProgress)
+                if (node == null) continue;
+
+                if (Vector3.Distance(node.transform.position, predictedPosition) <= cutoffRadius)
                 {
-                    StopSearch(searchRoutine);
-                }
-                SetMovingTowardsTargetPlayer(targetPlayer);
-            }
-            else if (chaseTimer <= 0f)
-            {
-                if (hasLOS)
-                {
-                    hasLOS = false;
-                }
-                if (!searchRoutine.inProgress)
-                {
-                    StartSearch(base.transform.position, searchRoutine);
+                    validNodes.Add(node);
                 }
             }
-            else if (previousTarget != null)
+
+            if (validNodes.Count > 0)
             {
-                SetMovingTowardsTargetPlayer(previousTarget);
+                GameObject chosenNode = validNodes[enemyRandom.Next(0, validNodes.Count)];
+
+                pendingTeleportPosition = chosenNode.transform.position;
+                pendingTeleportTarget = targetPlayer;
+                teleportWarningTimer = teleportWarningDelay;
+                isPreparingTeleport = true;
+
+                if (movementAudio != null && chargeUpTPSFX != null)
+                {
+                    movementAudio.PlayOneShot(chargeUpTPSFX, 0.8f);
+                }
+
+                if (IsServer && TeleportSwirl != null)
+                {
+                    Vector3 spawnPos = pendingTeleportPosition + (Vector3.up * 1.5f);
+                    currentNetworkSwirl = Instantiate(TeleportSwirl, spawnPos, Quaternion.identity);
+                    if (currentNetworkSwirl != null)
+                    {
+                        NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+                        if (netObj != null) netObj.Spawn(true);
+                    }
+                }
             }
+            else
+            {
+                LogIfDebugBuild("No nodes found ahead of the player. Falling back to normal LDTp.");
+                TpNearestNode(targetPlayer);
+            }
+        }
+
+        private bool IsBeingBurnedByFlashlight()
+        {
+            PlayerControllerB[] visiblePlayers = GetAllPlayersInLineOfSight(360, 15);
+
+            if (visiblePlayers == null || visiblePlayers.Length == 0) return false;
+
+            foreach (PlayerControllerB player in visiblePlayers)
+            {
+                Vector3 directionToObake = transform.position - player.transform.position;
+                float viewAngle = Vector3.Angle(player.transform.forward, directionToObake);
+
+                // Flashlights have roughly a 30-degree cone. 
+                // If the angle is larger, they are facing away.
+                if (Mathf.Abs(viewAngle) > 30f) continue;
+
+                if (player.pocketedFlashlight != null && player.pocketedFlashlight.isBeingUsed)
+                {
+                    return true;
+                }
+
+                GrabbableObject heldItem = player.currentlyHeldObjectServer;
+                if (player.isHoldingObject && heldItem != null)
+                {
+                    if (heldItem is FlashlightItem flashlight && flashlight.isBeingUsed)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        [ClientRpc]
+        public void SetBurningStateClientRpc(bool isBurning)
+        {
+            isCurrentlyBurning = isBurning;
+            creatureAnimator.SetBool("isBeingBurned", isBurning);
+
+            if (isBurning)
+            {
+                LogIfDebugBuild("Obake is being burned! Playing pain SFX and Animation.");
+                if (creatureVoice != null) creatureVoice.Pause();
+                if (creatureSFX != null && creaturePainSFX != null) creatureSFX.PlayOneShot(creaturePainSFX);
+
+                if (!isFlickeringLights && !isEnemyDead)
+                {
+                    StartCoroutine(FlickerLightsDuringStun());
+                }
+            }
+            else
+            {
+
+                if (creatureVoice != null) creatureVoice.Play();
+            }
+        }
+
+        private IEnumerator FlickerLightsDuringStun()
+        {
+            isFlickeringLights = true;
+
+            Light[] allLights = FindObjectsOfType<Light>();
+            Dictionary<Light, float> originalIntensities = new Dictionary<Light, float>();
+            List<Light> nearbyLights = new List<Light>();
+
+            float radiusSq = 10f * 10f;
+
+            foreach (Light l in allLights)
+            {
+                if (l == null || l.type == LightType.Directional) continue;
+
+                string nameLower = l.gameObject.name.ToLower();
+                if (nameLower.Contains("helmet") || nameLower.Contains("visor") || nameLower.Contains("sun")) continue;
+
+                if ((l.transform.position - transform.position).sqrMagnitude <= radiusSq)
+                {
+                    nearbyLights.Add(l);
+                    originalIntensities[l] = l.intensity;
+                }
+            }
+
+            while (stunNormalizedTimer > 0f && !isEnemyDead)
+            {
+                foreach (Light l in nearbyLights)
+                {
+                    if (l != null && originalIntensities.ContainsKey(l))
+                    {
+                        float rand = UnityEngine.Random.value;
+                        if (rand > 0.8f) l.intensity = originalIntensities[l] * 2.5f; // Intense flash
+                        else if (rand > 0.5f) l.intensity = originalIntensities[l] * 0.1f; // Dim out
+                        else l.intensity = originalIntensities[l]; // Normal
+                    }
+                }
+
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            foreach (var kvp in originalIntensities)
+            {
+                if (kvp.Key != null) kvp.Key.intensity = kvp.Value;
+            }
+
+            isFlickeringLights = false;
         }
 
         private void TpNearestNode(PlayerControllerB targetPlayer)
@@ -468,11 +768,25 @@ namespace Obake
                 LogIfDebugBuild("Target lost, no tp for me :(");
                 return;
             }
-            float currentDistance = Vector3.Distance(pendingTeleportPosition, pendingTeleportTarget.transform.position);
 
-            if (currentDistance <= maxDistanceAfterWarning && currentDistance > minDistanceAfterWarning)
+            float obakeToPlayerDist = Vector3.Distance(transform.position, pendingTeleportTarget.transform.position);
+            float swirlToPlayerDist = Vector3.Distance(pendingTeleportPosition, pendingTeleportTarget.transform.position);
+
+            if (obakeToPlayerDist <= 4f)
             {
-                LogIfDebugBuild($"Player is {currentDistance} units away (Cutoff is {maxDistanceAfterWarning}). I am tp'ing!!");
+                LogIfDebugBuild($"Player is only {obakeToPlayerDist} units away from Obake. Canceling teleport to attack!");
+                return;
+            }
+
+            if (obakeToPlayerDist <= swirlToPlayerDist)
+            {
+                LogIfDebugBuild($"Obake ({obakeToPlayerDist}u) is closer than the Swirl ({swirlToPlayerDist}u). Canceling teleport so we don't move backwards!");
+                return;
+            }
+
+            if (swirlToPlayerDist <= maxDistanceAfterWarning)
+            {
+                LogIfDebugBuild($"Player is {swirlToPlayerDist} units away from Swirl. I am tp'ing!!");
                 if (IsServer)
                 {
                     TeleportObakeClientRpc(pendingTeleportPosition);
@@ -484,7 +798,7 @@ namespace Obake
             }
             else
             {
-                LogIfDebugBuild($"Player too far or too close to TP smoke! They are {currentDistance} units away. Teleport cancelled.");
+                LogIfDebugBuild($"Player too far from TP smoke! They are {swirlToPlayerDist} units away from Swirl. Teleport cancelled.");
             }
         }
 
@@ -526,6 +840,43 @@ namespace Obake
             TeleportObakeLocally(newPos);
         }
 
+        private void DrainLocalFlashlightBattery()
+        {
+            if (isEnemyDead) return;
+
+            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
+            if (localPlayer == null || localPlayer.isPlayerDead) return;
+            if (Vector3.Distance(transform.position, localPlayer.transform.position) > 15f) return;
+
+            FlashlightItem activeFlashlight = null;
+
+            for (int i = 0; i < localPlayer.ItemSlots.Length; i++)
+            {
+                GrabbableObject item = localPlayer.ItemSlots[i];
+
+                if (item != null && item is FlashlightItem flashlight)
+                {
+
+                    if (flashlight.isBeingUsed && flashlight.insertedBattery != null && flashlight.insertedBattery.charge > 0)
+                    {
+                        activeFlashlight = flashlight;
+                        break;
+                    }
+                }
+            }
+
+            if (activeFlashlight != null)
+            {
+                float drainPenaltyMultiplier = 4f;
+
+                float extraDrain = (Time.deltaTime / activeFlashlight.itemProperties.batteryUsage) * drainPenaltyMultiplier;
+
+                activeFlashlight.insertedBattery.charge -= extraDrain;
+
+                activeFlashlight.flashlightInterferenceLevel = 1;
+            }
+        }
+
         private void SetVisibility()
         {
             float num = Vector3.Distance(StartOfRound.Instance.audioListener.transform.position, base.transform.position + Vector3.up * 0.7f);
@@ -534,11 +885,20 @@ namespace Obake
 
             float clampedCutoff = Mathf.Clamp(alphaCutoff, 0.01f, 1f);
 
+            if (stunNormalizedTimer > 0f)
+            {
+                float flickerInstabilitySpeed = 10f;
+                clampedCutoff = Mathf.Repeat(Time.time * flickerInstabilitySpeed, 1f) > 0.5f ? 1f : 0.01f;
+            }
+
             for (int i = 0; i < thisMaterial.Length; i++)
             {
                 if (thisMaterial[i] != null)
                 {
-                    thisMaterial[i].SetFloat("_AlphaCutoff", clampedCutoff);
+                    if (thisMaterial[i].HasProperty("_AlphaCutoff"))
+                    {
+                        thisMaterial[i].SetFloat("_AlphaCutoff", clampedCutoff);
+                    }
                 }
             }
 
@@ -550,8 +910,6 @@ namespace Obake
             {
                 localPlayerController.IncreaseFearLevelOverTime(0.37f, 0.25f);
             }
-
-            if (stunNormalizedTimer>0f)
         }
 
         private void FadeTransparentParticle(ParticleSystem ps, float fadeValue)
@@ -585,7 +943,9 @@ namespace Obake
         {
             if (isEnemyDead) return;
             LogIfDebugBuild("Gramophone fully wound. Obake defeated!");
-
+            NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+            netObj.Spawn(false);
+            creatureVoice.Stop();
             SpawnRapierLocally();
             base.KillEnemy(true);
         }
