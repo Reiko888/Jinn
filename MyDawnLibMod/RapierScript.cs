@@ -248,7 +248,7 @@ namespace Obake
                 Debug.Log($"[RapierDebug-Attack] Swing valid. Cooldown cleared ({timeSinceLastHit}s elapsed). Casting sphere...");
                 previousPlayerHeldBy.twoHanded = false;
 
-                objectsHitByRapier = Physics.SphereCastAll(previousPlayerHeldBy.gameplayCamera.transform.position + previousPlayerHeldBy.gameplayCamera.transform.right * 0.1f, 0.3f, previousPlayerHeldBy.gameplayCamera.transform.forward, 0.75f, rapierMask, QueryTriggerInteraction.Collide);
+                objectsHitByRapier = Physics.SphereCastAll(previousPlayerHeldBy.gameplayCamera.transform.position + previousPlayerHeldBy.gameplayCamera.transform.right * 0.1f, 0.3f, previousPlayerHeldBy.gameplayCamera.transform.forward, 1.5f, rapierMask, QueryTriggerInteraction.Collide);
                 objectsHitByRapierList = objectsHitByRapier.OrderBy((RaycastHit x) => x.distance).ToList();
 
                 Debug.Log($"[RapierDebug-Attack] SphereCast found {objectsHitByRapierList.Count} colliders.");
@@ -310,12 +310,12 @@ namespace Obake
                                 Debug.Log($"[RapierDebug-Attack] Valid Player Hit.");
                                 goto IL_033f;
                             }
-                            Debug.Log($"[RapierDebug-Attack] Player hit rejected (Already hit a player this swing).");
+                            //Debug.Log($"[RapierDebug-Attack] Player hit rejected (Already hit a player this swing).");
                             goto end_IL_029e;
 
                         IL_033f:
                             bool flag4 = component.Hit(rapierHitForce, forward, previousPlayerHeldBy, playHitSFX: true, 5);
-                            Debug.Log($"[RapierDebug-Attack] Sent Hit() event to entity. Success flag: {flag4}");
+                            //Debug.Log($"[RapierDebug-Attack] Sent Hit() event to entity. Success flag: {flag4}");
 
                             if (flag4 && component2 != null)
                             {
@@ -331,19 +331,19 @@ namespace Obake
                         }
                         catch (Exception arg)
                         {
-                            Debug.Log($"[RapierDebug-Attack] Exception caught when hitting object: {arg}");
+                            //Debug.Log($"[RapierDebug-Attack] Exception caught when hitting object: {arg}");
                         }
                     }
                 }
             }
             else if (!cancel)
             {
-                Debug.Log($"[RapierDebug-Attack] Attack ignored. Cooldown active! Only {timeSinceLastHit}s elapsed.");
+                //Debug.Log($"[RapierDebug-Attack] Attack ignored. Cooldown active! Only {timeSinceLastHit}s elapsed.");
             }
 
             if (flag)
             {
-                Debug.Log($"[RapierDebug-Attack] Attack sequence finished. Processing sounds and network sync. Hit Entity? {flag2}, Surface ID: {num}");
+                //Debug.Log($"[RapierDebug-Attack] Attack sequence finished. Processing sounds and network sync. Hit Entity? {flag2}, Surface ID: {num}");
 
                 if (rapierAudio != null && hitSFX != null && hitSFX.Length > 0)
                 {

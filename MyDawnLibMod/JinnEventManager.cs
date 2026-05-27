@@ -2,10 +2,10 @@
 using GameNetcodeStuff;
 using HarmonyLib;
 
-namespace Obake
+namespace Jinn
 {
     [HarmonyPatch]
-    public static class ObakeEventManager
+    public static class JinnEventManager
     {
         public static event Action OnShipLeft;
         public static event Action<PlayerControllerB> OnPlayerDied;

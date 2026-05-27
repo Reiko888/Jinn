@@ -5,7 +5,7 @@ using Dusk;
 using HarmonyLib;
 using System.Reflection;
 
-namespace Obake
+namespace Jinn
 {
     [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
     [BepInDependency(DawnLib.PLUGIN_GUID)]
@@ -15,10 +15,9 @@ namespace Obake
 
         private void Awake()
         {
-            Harmony harmony = new Harmony("Reiko888.Obake");
+            Harmony harmony = new Harmony("Reiko888.Jinn");
             Logger = base.Logger;
             harmony.PatchAll(Assembly.GetExecutingAssembly());
-            Logger.LogInfo("Obake Plugin has loaded!");
         }
     }
 }

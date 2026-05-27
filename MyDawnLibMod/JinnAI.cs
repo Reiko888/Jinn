@@ -5,9 +5,9 @@ using System.Diagnostics;
 using Unity.Netcode;
 using UnityEngine;
 
-namespace Obake
+namespace Jinn
 {
-    class ObakeAI : EnemyAI
+    class JinnAI : EnemyAI
     {
         System.Random enemyRandom = null!;
 
@@ -26,6 +26,8 @@ namespace Obake
         public GameObject TeleportSwirl;
 
         private GameObject currentNetworkSwirl;
+
+        public GameObject GramophonePropPrefab;
 
         private bool hasHeardGramophone = false;
 
@@ -77,7 +79,7 @@ namespace Obake
 
         public AudioSource movementAudio;
 
-        public AudioClip emergeSFX;
+        public AudioClip unsheathSFX;
 
         public AudioClip laughSFX;
 
@@ -105,7 +107,7 @@ namespace Obake
             else
             {
 
-                UnityEngine.Debug.Log($"[Obake] {text}");
+                UnityEngine.Debug.Log($"[Jinn] {text}");
             }
         }
 
@@ -142,18 +144,18 @@ namespace Obake
                 creatureVoice.Play();
             }
 
-            LogIfDebugBuild("Obake Spawned");
+            LogIfDebugBuild("Jinn Spawned");
             SpawnCursedGramophoneLocally();
         }
 
         private void OnEnable()
         {
-            ObakeEventManager.OnShipLeft += HandleShipLeft;
+            JinnEventManager.OnShipLeft += HandleShipLeft;
         }
 
         private void OnDisable()
         {
-            ObakeEventManager.OnShipLeft -= HandleShipLeft;
+            JinnEventManager.OnShipLeft -= HandleShipLeft;
         }
 
         private void HandleShipLeft()
@@ -168,19 +170,10 @@ namespace Obake
         public void SpawnCursedGramophoneLocally()
         {
             if (!IsServer) return;
-            Item gramophoneItem = null;
-            foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
-            {
-                if (item.itemName == "CursedGramophone")
-                {
-                    gramophoneItem = item;
-                    break;
-                }
-            }
 
-            if (gramophoneItem == null)
+            if (GramophonePropPrefab == null)
             {
-                LogIfDebugBuild("CursedGramophone item not found in allItemsList!");
+                LogIfDebugBuild("GramophonePropPrefab is missing! Cannot spawn the prop.");
                 return;
             }
 
@@ -213,7 +206,7 @@ namespace Obake
                         {
                             safeSpawnPos = testPos;
                             foundValidSpawn = true;
-                            break; 
+                            break;
                         }
                     }
                 }
@@ -225,27 +218,15 @@ namespace Obake
                 if (fallbackNode != null)
                 {
                     safeSpawnPos = fallbackNode.transform.position;
-                    LogIfDebugBuild("Failed to find valid scrap node. Falling back to an AI Node spawn to prevent pit spawn.");
+                    LogIfDebugBuild("Failed to find valid scrap node. Falling back to an AI Node");
                 }
             }
 
             safeSpawnPos.y += 1.0f;
+            GameObject gramophoneProp = Instantiate(GramophonePropPrefab, safeSpawnPos, Quaternion.identity);
+            gramophoneProp.GetComponent<NetworkObject>().Spawn();
 
-            GameObject gramophoneDrop = Instantiate(gramophoneItem.spawnPrefab, safeSpawnPos, Quaternion.identity, RoundManager.Instance.spawnedScrapContainer);
-            GrabbableObject gramophoneGrabbable = gramophoneDrop.GetComponent<GrabbableObject>();
-
-            int gramophoneValue = enemyRandom.Next(150, 350);
-            gramophoneGrabbable.SetScrapValue(gramophoneValue);
-
-            gramophoneGrabbable.fallTime = 0f;
-            gramophoneGrabbable.targetFloorPosition = gramophoneGrabbable.GetItemFloorPosition(safeSpawnPos);
-            gramophoneDrop.GetComponent<NetworkObject>().Spawn();
-            gramophoneGrabbable.EnableItemMeshes(true);
-
-            gramophoneGrabbable.grabbable = false;
-            gramophoneDrop.layer = LayerMask.NameToLayer("Default");
-
-            LogIfDebugBuild("Dropped CursedGramophone item at valid, accessible node!");
+            LogIfDebugBuild("Dropped Gramophone PROP at valid node!");
         }
 
         public void SpawnRapierLocally()
@@ -282,7 +263,7 @@ namespace Obake
             rapierDrop.GetComponent<NetworkObject>().Spawn();
             rapierGrabbable.EnableItemMeshes(true);
 
-            LogIfDebugBuild("Dropped Rapier item upon Obake's defeat");
+            LogIfDebugBuild("Dropped Rapier item upon Jinn defeat");
         }
 
         public override void Update()
@@ -358,12 +339,16 @@ namespace Obake
             }
             else
             {
+                if (teleportCooldownTimer > 0f)
+                {
+                    teleportCooldownTimer -= Time.deltaTime;
+                }
+
                 if (targetPlayer != null)
                 {
-
                     continuousChaseTimer += Time.deltaTime;
 
-                    if (continuousChaseTimer >= 5f && !isPreparingTeleport)
+                    if (continuousChaseTimer >= 5f && !isPreparingTeleport && teleportCooldownTimer <= 0f)
                     {
                         tpRollTimer += Time.deltaTime;
 
@@ -391,12 +376,6 @@ namespace Obake
                 if (hasHeardGramophone)
                 {
                     agent.speed = gramoDash;
-
-                    if (timesinceHearingGramophone > 12f)
-                    {
-                        hasHeardGramophone = false;
-                        LogIfDebugBuild("Gramophone timeout reached");
-                    }
                 }
                 else if (timeSinceLastAttack < 2f)
                 {
@@ -404,14 +383,7 @@ namespace Obake
                 }
                 else
                 {
-                    if (timeSinceSeen > 3f)
-                    {
-                        agent.speed = 7f;
-                    }
-                    else
-                    {
-                        agent.speed = 5f;
-                    }
+                    agent.speed = 7f;
                 }
             }
         }
@@ -485,13 +457,13 @@ namespace Obake
 
         private void CheckAndFireLastDitchTeleport()
         {
-            if (!hasAttemptedLastDitchTp && !isPreparingTeleport && targetPlayer != null)
+            if (!hasAttemptedLastDitchTp && !isPreparingTeleport && targetPlayer != null && teleportCooldownTimer <= 0f)
             {
                 hasAttemptedLastDitchTp = true;
 
                 if (UnityEngine.Random.value <= 0.75f)
                 {
-                    LogIfDebugBuild("Target lost! Attempting last ditch teleport to cut them off.");
+                    LogIfDebugBuild("Lost target, attempting TP.");
                     TpToCutoffNode(targetPlayer);
                 }
             }
@@ -598,7 +570,7 @@ namespace Obake
 
             if (isBurning)
             {
-                LogIfDebugBuild("Obake is being burned! Playing pain SFX and Animation.");
+                LogIfDebugBuild("Jinn is being burned");
                 if (creatureVoice != null) creatureVoice.Pause();
                 if (creatureSFX != null && creaturePainSFX != null) creatureSFX.PlayOneShot(creaturePainSFX);
 
@@ -687,6 +659,7 @@ namespace Obake
                 pendingTeleportTarget = targetPlayer;
                 teleportWarningTimer = teleportWarningDelay;
                 isPreparingTeleport = true;
+                teleportCooldownTimer = teleportCooldown;
 
                 if (movementAudio != null && chargeUpTPSFX != null)
                 {
@@ -774,13 +747,13 @@ namespace Obake
 
             if (obakeToPlayerDist <= 4f)
             {
-                LogIfDebugBuild($"Player is only {obakeToPlayerDist} units away from Obake. Canceling teleport to attack!");
+                LogIfDebugBuild($"Player is only {obakeToPlayerDist} units away from Obake. Canceling teleport to attack");
                 return;
             }
 
             if (obakeToPlayerDist <= swirlToPlayerDist)
             {
-                LogIfDebugBuild($"Obake ({obakeToPlayerDist}u) is closer than the Swirl ({swirlToPlayerDist}u). Canceling teleport so we don't move backwards!");
+                LogIfDebugBuild($"Obake ({obakeToPlayerDist}u) is closer than smoke ({swirlToPlayerDist}u). Cancelling teleport");
                 return;
             }
 
@@ -798,7 +771,7 @@ namespace Obake
             }
             else
             {
-                LogIfDebugBuild($"Player too far from TP smoke! They are {swirlToPlayerDist} units away from Swirl. Teleport cancelled.");
+                LogIfDebugBuild($"Player too far from TP smoke! They are {swirlToPlayerDist} units away from Swirl.");
             }
         }
 
@@ -846,34 +819,48 @@ namespace Obake
 
             PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
             if (localPlayer == null || localPlayer.isPlayerDead) return;
-            if (Vector3.Distance(transform.position, localPlayer.transform.position) > 15f) return;
+
+            float dist = Vector3.Distance(transform.position, localPlayer.transform.position);
 
             FlashlightItem activeFlashlight = null;
 
-            for (int i = 0; i < localPlayer.ItemSlots.Length; i++)
+            if (localPlayer.pocketedFlashlight != null && localPlayer.pocketedFlashlight is FlashlightItem pocketLight)
             {
-                GrabbableObject item = localPlayer.ItemSlots[i];
-
-                if (item != null && item is FlashlightItem flashlight)
-                {
-
-                    if (flashlight.isBeingUsed && flashlight.insertedBattery != null && flashlight.insertedBattery.charge > 0)
-                    {
-                        activeFlashlight = flashlight;
-                        break;
-                    }
-                }
+                activeFlashlight = pocketLight;
+            }
+            else if (localPlayer.currentlyHeldObjectServer != null && localPlayer.currentlyHeldObjectServer is FlashlightItem heldLight)
+            {
+                activeFlashlight = heldLight;
             }
 
             if (activeFlashlight != null)
             {
-                float drainPenaltyMultiplier = 4f;
 
-                float extraDrain = (Time.deltaTime / activeFlashlight.itemProperties.batteryUsage) * drainPenaltyMultiplier;
+                if (dist > 30f || !activeFlashlight.isBeingUsed)
+                {
+                    if (activeFlashlight.flashlightInterferenceLevel == 1)
+                    {
+                        activeFlashlight.flashlightInterferenceLevel = 0;
+                    }
+                    return; // Stop draining
+                }
 
-                activeFlashlight.insertedBattery.charge -= extraDrain;
+                if (activeFlashlight.insertedBattery != null && activeFlashlight.insertedBattery.charge > 0f)
+                {
+                    activeFlashlight.insertedBattery.charge -= (Time.deltaTime * 0.15f);
 
-                activeFlashlight.flashlightInterferenceLevel = 1;
+                    activeFlashlight.flashlightInterferenceLevel = 1;
+
+                    LogIfDebugBuild($"Distance: {dist}. Battery now at: {activeFlashlight.insertedBattery.charge}");
+
+                    if (activeFlashlight.insertedBattery.charge <= 0f)
+                    {
+                        activeFlashlight.insertedBattery.charge = 0f;
+                        activeFlashlight.insertedBattery.empty = true;
+                        activeFlashlight.UseUpBatteries();
+                        activeFlashlight.flashlightInterferenceLevel = 0;
+                    }
+                }
             }
         }
 
@@ -934,7 +921,7 @@ namespace Obake
             hasHeardGramophone = true;
             timesinceHearingGramophone = 0f;
             gramoDash = agent.speed * 1.5f;
-            LogIfDebugBuild("The Obake hears the Gramophone!");
+            LogIfDebugBuild("The Jinn hears the Gramophone");
 
             SetDestinationToPosition(gramophonePosition);
         }
@@ -942,10 +929,36 @@ namespace Obake
         public void DefeatObake()
         {
             if (isEnemyDead) return;
-            LogIfDebugBuild("Gramophone fully wound. Obake defeated!");
-            NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
-            netObj.Spawn(false);
-            creatureVoice.Stop();
+            LogIfDebugBuild("Gramophone fully wound");
+
+            DefeatObakeServerRpc();
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void DefeatObakeServerRpc()
+        {
+            DefeatObakeClientRpc();
+        }
+
+        [ClientRpc]
+        public void DefeatObakeClientRpc()
+        {
+            if (isEnemyDead) return;
+            LogIfDebugBuild("Jinn defeated");
+
+            if (IsServer && currentNetworkSwirl != null)
+            {
+                NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+                if (netObj != null && netObj.IsSpawned)
+                {
+                    netObj.Despawn(true);
+                }
+            }
+
+            if (creatureVoice != null)
+            {
+                creatureVoice.Stop();
+            }
             SpawnRapierLocally();
             base.KillEnemy(true);
         }

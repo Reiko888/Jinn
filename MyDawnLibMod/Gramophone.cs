@@ -1,35 +1,23 @@
 ﻿using UnityEngine;
-using GameNetcodeStuff;
 using Unity.Netcode;
-using Obake;
+using Jinn;
 
-public class GramophoneItem : GrabbableObject
+public class GramophoneProp : NetworkBehaviour
 {
     public InteractTrigger windingTrigger;
-    public AudioSource gramophoneAudio;
     public AudioSource windingAudioSource;
     public AudioClip windingLoopSFX;
     public Animator gramophoneAnimator;
-    public GameObject smokeEffect;
 
     private bool isDefeated = false;
-
-    public void OnWindingProgress(float progress)
-    {
-        if (isDefeated) return;
-    }
 
     public void OnWindingStarted()
     {
         if (isDefeated) return;
-
         SetWindingStateServerRpc(true);
 
-        ObakeAI obake = FindObjectOfType<ObakeAI>();
-        if (obake != null)
-        {
-            obake.HearGramophone(transform.position);
-        }
+        JinnAI obake = FindObjectOfType<JinnAI>();
+        if (obake != null) obake.HearGramophone(transform.position);
     }
 
     public void OnWindingStopped()
@@ -38,17 +26,11 @@ public class GramophoneItem : GrabbableObject
         SetWindingStateServerRpc(false);
     }
 
-    public void OnWindingComplete(PlayerControllerB playerWhoWoundIt)
+    public void OnWindingComplete(GameNetcodeStuff.PlayerControllerB playerWhoWoundIt)
     {
         if (isDefeated) return;
-
-        SetGrabbableServerRpc();
-
-        ObakeAI obake = FindObjectOfType<ObakeAI>();
-        if (obake != null)
-        {
-            obake.DefeatObake();
-        }
+        isDefeated = true;
+        CompleteWindingServerRpc();
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -56,6 +38,7 @@ public class GramophoneItem : GrabbableObject
     {
         SetWindingStateClientRpc(isWinding);
     }
+
     [ClientRpc]
     public void SetWindingStateClientRpc(bool isWinding)
     {
@@ -69,54 +52,46 @@ public class GramophoneItem : GrabbableObject
                 windingAudioSource.loop = true;
                 if (!windingAudioSource.isPlaying) windingAudioSource.Play();
             }
-            if (gramophoneAnimator != null)
-            {
-                gramophoneAnimator.SetBool("isWinding", true);
-            }
+            if (gramophoneAnimator != null) gramophoneAnimator.SetBool("isWinding", true);
         }
         else
         {
-            if (windingAudioSource != null && windingAudioSource.isPlaying)
-            {
-                windingAudioSource.Stop();
-            }
-            if (gramophoneAnimator != null)
-            {
-                gramophoneAnimator.SetBool("isWinding", false);
-            }
+            if (windingAudioSource != null && windingAudioSource.isPlaying) windingAudioSource.Stop();
+            if (gramophoneAnimator != null) gramophoneAnimator.SetBool("isWinding", false);
         }
     }
 
     [ServerRpc(RequireOwnership = false)]
-    public void SetGrabbableServerRpc()
+    public void CompleteWindingServerRpc()
     {
-        SetGrabbableClientRpc();
-    }
+        if (!IsServer) return;
 
-    [ClientRpc]
-    public void SetGrabbableClientRpc()
-    {
-        isDefeated = true;
+        JinnAI obake = FindObjectOfType<JinnAI>();
+        if (obake != null) obake.DefeatObakeServerRpc();
 
-        if (gramophoneAudio != null) gramophoneAudio.Stop();
-        if (windingAudioSource != null) windingAudioSource.Stop();
-
-        if (gramophoneAnimator != null)
+        Item gramophoneScrapItem = null;
+        foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
         {
-            gramophoneAnimator.SetBool("isWinding", false);
-        }
-        if (smokeEffect != null)
-        {
-            smokeEffect.SetActive(false);
+            if (item.itemName == "Cursed Gramophone")
+            {
+                gramophoneScrapItem = item;
+                break;
+            }
         }
 
-        if (windingTrigger != null)
+        if (gramophoneScrapItem != null)
         {
-            windingTrigger.interactable = false;
-            windingTrigger.gameObject.SetActive(false);
+            GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, RoundManager.Instance.spawnedScrapContainer);
+            GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
+
+            int scrapValue = UnityEngine.Random.Range(150, 350);
+            grabbable.SetScrapValue(scrapValue);
+            grabbable.fallTime = 0f;
+            grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
+
+            scrapDrop.GetComponent<NetworkObject>().Spawn();
         }
 
-        gameObject.layer = LayerMask.NameToLayer("Props");
-        grabbable = true;
+        NetworkObject.Despawn(true);
     }
 }
