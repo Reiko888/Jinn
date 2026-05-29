@@ -1,11 +1,12 @@
-﻿using System;
+﻿using GameNetcodeStuff;
+using Jinn;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using GameNetcodeStuff;
 using Unity.Netcode;
 using UnityEngine;
 
-namespace Obake
+namespace Jinn
 {
     public class RapierItem : GrabbableObject
     {
@@ -35,6 +36,11 @@ namespace Obake
         private bool _savedJumping;
         private bool _savedSprinting;
 
+        private void Start()
+        {
+            rapierHitForce = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBaseSpeed").Value;
+        }
+
         public override void EquipItem()
         {
             base.EquipItem();
@@ -45,6 +51,16 @@ namespace Obake
                 previousPlayerHeldBy.equippedUsableItemQE = true;
                 EnableRapierAnimator();
                 playerHeldBy.playerBodyAnimator.SetBool(itemProperties.grabAnim, true);
+            }
+        }
+
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+
+            if (!isHeld && !isPocketed)
+            {
+                EnableItemMeshes(true);
             }
         }
 

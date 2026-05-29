@@ -84,12 +84,14 @@ public class GramophoneProp : NetworkBehaviour
             GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, RoundManager.Instance.spawnedScrapContainer);
             GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
 
-            int scrapValue = UnityEngine.Random.Range(150, 350);
-            grabbable.SetScrapValue(scrapValue);
             grabbable.fallTime = 0f;
             grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
 
             scrapDrop.GetComponent<NetworkObject>().Spawn();
+
+            int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
+
+            grabbable.SetScrapValue(scrapValue);
         }
 
         NetworkObject.Despawn(true);

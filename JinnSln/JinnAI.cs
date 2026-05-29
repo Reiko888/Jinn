@@ -10,13 +10,19 @@ namespace Jinn
     class JinnAI : EnemyAI
     {
         System.Random enemyRandom = null!;
-
-        public float minDistance;
-
-        public float maxDistance;
-
-        private float attackCooldown = 0f;
-
+        private int baseSpeed;
+        private int attackCooldownSlow;
+        private float minDistance;
+        private float maxDistance;
+        private bool canTeleport;
+        private float teleportWarningDelay;
+        private float maxDistanceAfterWarning;
+        private float minDistanceAfterWarning;
+        private bool canBeBurned;
+        private bool burnLights;
+        private int flashlightDrainPercentage;
+        private int burnSlowdown;
+        private int attackDamage;
         public SkinnedMeshRenderer skin;
 
         public Material[] thisMaterial;
@@ -47,11 +53,7 @@ namespace Jinn
 
         private bool hasAttemptedLastDitchTp = false;
 
-        public float teleportWarningDelay = 6f;
-
-        public float maxDistanceAfterWarning = 18f;
-
-        public float minDistanceAfterWarning = 8f;
+        private bool isManifesting = false;
 
         private bool isFlickeringLights = false;
 
@@ -77,6 +79,8 @@ namespace Jinn
 
         private float teleportCooldownTimer = 0f;
 
+
+        //AUDIO
         public AudioSource movementAudio;
 
         public AudioClip unsheathSFX;
@@ -89,13 +93,12 @@ namespace Jinn
 
         public AudioClip chargeUpTPSFX;
 
-        public AudioClip creaturePainSFX; 
+        public AudioClip creaturePainSFX;
 
+        //PARTICLES
         public ParticleSystem mistParticles;
 
         public ParticleSystem decayingMatterParticles;
-
-
 
         [Conditional("DEBUG")]
         void LogIfDebugBuild(string text)
@@ -106,19 +109,28 @@ namespace Jinn
             }
             else
             {
-
                 UnityEngine.Debug.Log($"[Jinn] {text}");
             }
-        }
-
-        public override void Awake()
-        {
-            base.Awake();
         }
 
         public override void Start()
         {
             base.Start();
+            updatePositionThreshold = 0.5f;
+            baseSpeed = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBaseSpeed").Value;
+            attackCooldownSlow = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackCooldownSlow").Value;
+            minDistance = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnMinVisibleDist").Value;
+            maxDistance = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnMaxVisibleDist").Value;
+            canTeleport = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigJinnCanTeleport").Value;
+            teleportWarningDelay = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnTPWarnDelay").Value;
+            maxDistanceAfterWarning = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnMaxDistAfterDelay").Value;
+            minDistanceAfterWarning = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnMinnDistAfterDelay").Value;
+            canBeBurned = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigJinnCanBeBurned").Value;
+            burnLights = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigJinnBurnLights").Value;
+            flashlightDrainPercentage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnFlashlightConsumption").Value;
+            burnSlowdown = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBurnSlowdown").Value;
+            attackDamage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackDamage").Value;
+
             List<Material> combinedMaterials = new List<Material>();
 
             if (skin != null)
@@ -165,7 +177,6 @@ namespace Jinn
             if (creatureVoice != null) creatureVoice.Stop();
             KillEnemy(true);
         }
-
 
         public void SpawnCursedGramophoneLocally()
         {
@@ -260,6 +271,9 @@ namespace Jinn
 
             rapierGrabbable.fallTime = 0f;
             rapierGrabbable.targetFloorPosition = rapierGrabbable.GetItemFloorPosition(safeSpawnPos);
+
+            int scrapValue = (int)(UnityEngine.Random.Range(rapierItem.minValue, rapierItem.maxValue) * RoundManager.Instance.scrapValueMultiplier);
+            rapierGrabbable.SetScrapValue(scrapValue);
             rapierDrop.GetComponent<NetworkObject>().Spawn();
             rapierGrabbable.EnableItemMeshes(true);
 
@@ -286,7 +300,6 @@ namespace Jinn
             {
                 chaseTimer -= Time.deltaTime;
             }
-            if (attackCooldown > 0f) attackCooldown -= Time.deltaTime;
 
             if (!base.IsOwner) return;
 
@@ -297,7 +310,7 @@ namespace Jinn
 
             if (isBurnedNow)
             {
-                agent.speed = 1f; 
+                agent.speed = burnSlowdown;
 
                 if (!wasBeingBurned)
                 {
@@ -319,6 +332,24 @@ namespace Jinn
                 StartCoroutine(FlickerLightsDuringStun());
             }
 
+            if (targetPlayer != null)
+            {
+                float distToTarget = Vector3.Distance(transform.position, targetPlayer.transform.position);
+                if (distToTarget <= maxDistance && !isManifesting)
+                {
+                    isManifesting = true;
+                    SetManifestingStateServerRpc(true);
+                }
+                else if (distToTarget > maxDistance + 5f && isManifesting)
+                {
+                    isManifesting = false;
+                }
+            }
+            else
+            {
+                isManifesting = false;
+            }
+
             if (isPreparingTeleport)
             {
                 teleportWarningTimer -= Time.deltaTime;
@@ -327,11 +358,6 @@ namespace Jinn
                     ExecuteDelayedTeleport();
                 }
             }
-
-            //if(hasLOS==true)
-            //{
-            //    creatureVoice.Pitch(0.5f);
-            //}
 
             if (isEnemyDead)
             {
@@ -376,15 +402,23 @@ namespace Jinn
                 if (hasHeardGramophone)
                 {
                     agent.speed = gramoDash;
+
+                    if (timesinceHearingGramophone > 12f)
+                    {
+                        hasHeardGramophone = false;
+                        LogIfDebugBuild("Gramophone timeout reached. Baclk to normal speed.");
+                    }
                 }
                 else if (timeSinceLastAttack < 2f)
                 {
-                    agent.speed = 2f;
+                    agent.speed = attackCooldownSlow;
                 }
                 else
                 {
-                    agent.speed = 7f;
+                    agent.speed = baseSpeed;
                 }
+
+                syncMovementSpeed = agent.speed;
             }
         }
 
@@ -392,6 +426,8 @@ namespace Jinn
         {
             base.DoAIInterval();
             if (isEnemyDead || StartOfRound.Instance.allPlayersDead) return;
+
+            if (hasHeardGramophone) return;
 
             if (targetPlayer != null)
             {
@@ -401,7 +437,7 @@ namespace Jinn
                     timeSinceSeen = 0f;
                     chaseTimer = 10f;
                     lastPosition = targetPlayer.transform.position;
-                    hasAttemptedLastDitchTp = false; 
+                    hasAttemptedLastDitchTp = false;
 
                     if (currentSearch != null && currentSearch.inProgress) StopSearch(currentSearch);
                     SetMovingTowardsTargetPlayer(targetPlayer);
@@ -471,6 +507,8 @@ namespace Jinn
 
         private void TpToCutoffNode(PlayerControllerB targetPlayer)
         {
+            if (!canTeleport) return;
+
             if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
 
             Vector3 playerVelocity = targetPlayer.thisController.velocity;
@@ -485,7 +523,7 @@ namespace Jinn
             Vector3 predictedPosition = targetPlayer.transform.position + (playerVelocity.normalized * 15f);
 
             List<GameObject> validNodes = new List<GameObject>();
-            float cutoffRadius = 12f; 
+            float cutoffRadius = 12f;
 
             foreach (GameObject node in allAINodes)
             {
@@ -531,6 +569,8 @@ namespace Jinn
 
         private bool IsBeingBurnedByFlashlight()
         {
+            if (!canBeBurned) return false;
+
             PlayerControllerB[] visiblePlayers = GetAllPlayersInLineOfSight(360, 15);
 
             if (visiblePlayers == null || visiblePlayers.Length == 0) return false;
@@ -540,8 +580,6 @@ namespace Jinn
                 Vector3 directionToObake = transform.position - player.transform.position;
                 float viewAngle = Vector3.Angle(player.transform.forward, directionToObake);
 
-                // Flashlights have roughly a 30-degree cone. 
-                // If the angle is larger, they are facing away.
                 if (Mathf.Abs(viewAngle) > 30f) continue;
 
                 if (player.pocketedFlashlight != null && player.pocketedFlashlight.isBeingUsed)
@@ -574,16 +612,28 @@ namespace Jinn
                 if (creatureVoice != null) creatureVoice.Pause();
                 if (creatureSFX != null && creaturePainSFX != null) creatureSFX.PlayOneShot(creaturePainSFX);
 
-                if (!isFlickeringLights && !isEnemyDead)
+                if (burnLights && !isFlickeringLights && !isEnemyDead)
                 {
                     StartCoroutine(FlickerLightsDuringStun());
                 }
             }
             else
             {
-
                 if (creatureVoice != null) creatureVoice.Play();
             }
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void SetManifestingStateServerRpc(bool manifesting)
+        {
+            SetManifestingStateClientRpc(manifesting);
+        }
+
+        [ClientRpc]
+        public void SetManifestingStateClientRpc(bool manifesting)
+        {
+            creatureAnimator.SetTrigger("isManifesting");
+            creatureSFX.PlayOneShot(unsheathSFX);
         }
 
         private IEnumerator FlickerLightsDuringStun()
@@ -636,6 +686,8 @@ namespace Jinn
 
         private void TpNearestNode(PlayerControllerB targetPlayer)
         {
+            if (!canTeleport) return;
+
             if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
 
             List<GameObject> validNodes = new List<GameObject>();
@@ -670,41 +722,19 @@ namespace Jinn
 
                 if (IsServer)
                 {
-                    LogIfDebugBuild("--- DEBUG: STARTING SWIRL SPAWN SEQUENCE ---");
-
-                    if (TeleportSwirl == null)
+                    if (TeleportSwirl != null)
                     {
-                        LogIfDebugBuild("DEBUG ERROR: TeleportSwirl prefab is NULL! The slot in the inspector/script is empty.");
-                    }
-                    else
-                    {
-                        LogIfDebugBuild($"DEBUG: TeleportSwirl prefab found. Name: {TeleportSwirl.name}");
                         Vector3 spawnPos = pendingTeleportPosition + (Vector3.up * 1.5f);
-                        LogIfDebugBuild($"DEBUG: Attempting to Instantiate at {spawnPos}");
-
                         currentNetworkSwirl = Instantiate(TeleportSwirl, spawnPos, Quaternion.identity);
 
-                        if (currentNetworkSwirl == null)
+                        if (currentNetworkSwirl != null)
                         {
-                            LogIfDebugBuild("DEBUG ERROR: Instantiate returned null! Unity failed to create the object.");
-                        }
-                        else
-                        {
-                            LogIfDebugBuild("DEBUG: Instantiate successful. Checking for NetworkObject component...");
                             NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
-
-                            if (netObj == null)
+                            if (netObj != null)
                             {
-                                LogIfDebugBuild("DEBUG ERROR: No NetworkObject component found on the spawned swirl!");
-                            }
-                            else
-                            {
-                                LogIfDebugBuild($"DEBUG: NetworkObject found. IsSpawned before: {netObj.IsSpawned}. Calling Spawn()...");
-
                                 try
                                 {
                                     netObj.Spawn(true);
-                                    LogIfDebugBuild($"DEBUG: Spawn called successfully. IsSpawned after: {netObj.IsSpawned}");
                                 }
                                 catch (System.Exception ex)
                                 {
@@ -713,7 +743,6 @@ namespace Jinn
                             }
                         }
                     }
-                    LogIfDebugBuild("--- DEBUG: END SWIRL SPAWN SEQUENCE ---");
                 }
             }
             else
@@ -757,7 +786,7 @@ namespace Jinn
                 return;
             }
 
-            if (swirlToPlayerDist <= maxDistanceAfterWarning)
+            if (swirlToPlayerDist <= maxDistanceAfterWarning && swirlToPlayerDist >= minDistanceAfterWarning)
             {
                 LogIfDebugBuild($"Player is {swirlToPlayerDist} units away from Swirl. I am tp'ing!!");
                 if (IsServer)
@@ -815,6 +844,8 @@ namespace Jinn
 
         private void DrainLocalFlashlightBattery()
         {
+            if (GameNetworkManager.Instance == null) return;
+
             if (isEnemyDead) return;
 
             PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
@@ -842,12 +873,13 @@ namespace Jinn
                     {
                         activeFlashlight.flashlightInterferenceLevel = 0;
                     }
-                    return; // Stop draining
+                    return;
                 }
 
                 if (activeFlashlight.insertedBattery != null && activeFlashlight.insertedBattery.charge > 0f)
                 {
-                    activeFlashlight.insertedBattery.charge -= (Time.deltaTime * 0.15f);
+                    float drainRate = flashlightDrainPercentage / 100f;
+                    activeFlashlight.insertedBattery.charge -= (Time.deltaTime * drainRate);
 
                     activeFlashlight.flashlightInterferenceLevel = 1;
 
@@ -866,6 +898,8 @@ namespace Jinn
 
         private void SetVisibility()
         {
+            if (StartOfRound.Instance == null || GameNetworkManager.Instance == null) return;
+
             float num = Vector3.Distance(StartOfRound.Instance.audioListener.transform.position, base.transform.position + Vector3.up * 0.7f);
 
             float alphaCutoff = (num - minDistance) / (maxDistance - minDistance);
@@ -893,7 +927,8 @@ namespace Jinn
             FadeTransparentParticle(decayingMatterParticles, clampedCutoff);
 
             PlayerControllerB localPlayerController = GameNetworkManager.Instance.localPlayerController;
-            if (!localPlayerController.isPlayerDead && localPlayerController != null && num < 15f && num > maxDistance + 2f)
+
+            if (localPlayerController != null && !localPlayerController.isPlayerDead && num < 15f && num > maxDistance + 2f)
             {
                 localPlayerController.IncreaseFearLevelOverTime(0.37f, 0.25f);
             }
@@ -972,9 +1007,14 @@ namespace Jinn
                 if (playerControllerB != null)
                 {
                     timeSinceLastAttack = 0f;
-                    playerControllerB.DamagePlayer(40, hasDamageSFX: true, callRPC: true, CauseOfDeath.Stabbing);
+
+                    playerControllerB.DamagePlayer(attackDamage, hasDamageSFX: true, callRPC: true, CauseOfDeath.Stabbing);
                     HitPlayerServerRpc();
-                    GameNetworkManager.Instance.localPlayerController.JumpToFearLevel(1f);
+
+                    if (GameNetworkManager.Instance != null && GameNetworkManager.Instance.localPlayerController != null)
+                    {
+                        GameNetworkManager.Instance.localPlayerController.JumpToFearLevel(1f);
+                    }
                 }
             }
         }
@@ -1003,7 +1043,7 @@ namespace Jinn
             }
             if (base.IsOwner)
             {
-                agent.speed = 2f;
+                agent.speed = attackCooldownSlow;
             }
         }
     }
