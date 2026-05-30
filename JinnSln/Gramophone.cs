@@ -17,7 +17,10 @@ public class GramophoneProp : NetworkBehaviour
         SetWindingStateServerRpc(true);
 
         JinnAI obake = FindObjectOfType<JinnAI>();
-        if (obake != null) obake.HearGramophone(transform.position);
+        if (obake != null)
+        {
+            obake.HearGramophoneServerRpc(transform.position);
+        }
     }
 
     public void OnWindingStopped()
@@ -67,7 +70,6 @@ public class GramophoneProp : NetworkBehaviour
         if (!IsServer) return;
 
         JinnAI obake = FindObjectOfType<JinnAI>();
-        if (obake != null) obake.DefeatObakeServerRpc();
 
         Item gramophoneScrapItem = null;
         foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
@@ -81,18 +83,25 @@ public class GramophoneProp : NetworkBehaviour
 
         if (gramophoneScrapItem != null)
         {
-            GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, RoundManager.Instance.spawnedScrapContainer);
+            GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, StartOfRound.Instance.propsContainer);
             GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
 
             grabbable.fallTime = 0f;
             grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
 
-            scrapDrop.GetComponent<NetworkObject>().Spawn();
+            NetworkObject netObj = scrapDrop.GetComponent<NetworkObject>();
+            netObj.Spawn();
 
             int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
-
             grabbable.SetScrapValue(scrapValue);
+
+            if (obake != null)
+            {
+                obake.SyncScrapValueClientRpc(netObj, scrapValue);
+            }
         }
+
+        if (obake != null) obake.DefeatObakeServerRpc();
 
         NetworkObject.Despawn(true);
     }

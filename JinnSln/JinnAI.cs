@@ -79,6 +79,8 @@ namespace Jinn
 
         private float teleportCooldownTimer = 0f;
 
+        private Vector3 targetGramophonePos;
+
 
         //AUDIO
         public AudioSource movementAudio;
@@ -178,6 +180,16 @@ namespace Jinn
             KillEnemy(true);
         }
 
+        private Vector3 GetFloorPosition(Vector3 startPos)
+        {
+            Vector3 rayStart = startPos + (Vector3.up * 0.5f);
+
+            if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, 10f, StartOfRound.Instance.collidersAndRoomMaskAndDefault, QueryTriggerInteraction.Ignore))
+            {
+                return hit.point;
+            }
+            return startPos;
+        }
         public void SpawnCursedGramophoneLocally()
         {
             if (!IsServer) return;
@@ -233,11 +245,11 @@ namespace Jinn
                 }
             }
 
-            safeSpawnPos.y += 1.0f;
+            safeSpawnPos = GetFloorPosition(safeSpawnPos);
             GameObject gramophoneProp = Instantiate(GramophonePropPrefab, safeSpawnPos, Quaternion.identity);
             gramophoneProp.GetComponent<NetworkObject>().Spawn();
 
-            LogIfDebugBuild("Dropped Gramophone PROP at valid node!");
+            LogIfDebugBuild("Dropped Gramophone PROP at valid node, snapped to the floor!");
         }
 
         public void SpawnRapierLocally()
@@ -266,7 +278,7 @@ namespace Jinn
                 safeSpawnPos = rawSpawnPos;
             }
 
-            GameObject rapierDrop = Instantiate(rapierItem.spawnPrefab, safeSpawnPos, Quaternion.identity, RoundManager.Instance.spawnedScrapContainer);
+            GameObject rapierDrop = Instantiate(rapierItem.spawnPrefab, safeSpawnPos, Quaternion.identity, StartOfRound.Instance.propsContainer);
             GrabbableObject rapierGrabbable = rapierDrop.GetComponent<GrabbableObject>();
 
             rapierGrabbable.fallTime = 0f;
@@ -274,10 +286,27 @@ namespace Jinn
 
             int scrapValue = (int)(UnityEngine.Random.Range(rapierItem.minValue, rapierItem.maxValue) * RoundManager.Instance.scrapValueMultiplier);
             rapierGrabbable.SetScrapValue(scrapValue);
-            rapierDrop.GetComponent<NetworkObject>().Spawn();
+
+            NetworkObject netObj = rapierDrop.GetComponent<NetworkObject>();
+            netObj.Spawn();
+            SyncScrapValueClientRpc(netObj, scrapValue);
+
             rapierGrabbable.EnableItemMeshes(true);
 
             LogIfDebugBuild("Dropped Rapier item upon Jinn defeat");
+        }
+
+        [ClientRpc]
+        public void SyncScrapValueClientRpc(NetworkObjectReference netObjRef, int scrapValue)
+        {
+            if (netObjRef.TryGet(out NetworkObject netObj))
+            {
+                GrabbableObject grabObj = netObj.GetComponent<GrabbableObject>();
+                if (grabObj != null)
+                {
+                    grabObj.SetScrapValue(scrapValue);
+                }
+            }
         }
 
         public override void Update()
@@ -403,7 +432,7 @@ namespace Jinn
                 {
                     agent.speed = gramoDash;
 
-                    if (timesinceHearingGramophone > 12f)
+                    if (timesinceHearingGramophone > 35f)
                     {
                         hasHeardGramophone = false;
                         LogIfDebugBuild("Gramophone timeout reached. Baclk to normal speed.");
@@ -427,7 +456,20 @@ namespace Jinn
             base.DoAIInterval();
             if (isEnemyDead || StartOfRound.Instance.allPlayersDead) return;
 
-            if (hasHeardGramophone) return;
+            if (hasHeardGramophone)
+            {
+                if (Vector3.Distance(transform.position, targetGramophonePos) <= 3f)
+                {
+                    hasHeardGramophone = false;
+                    CancelGramophoneServerRpc();
+                }
+                else
+                {
+                    moveTowardsDestination = true;
+                    SetDestinationToPosition(targetGramophonePos, checkForPath: true);
+                    return;
+                }
+            }
 
             if (targetPlayer != null)
             {
@@ -950,15 +992,38 @@ namespace Jinn
             }
         }
 
-        public void HearGramophone(Vector3 gramophonePosition)
+        [ServerRpc(RequireOwnership = false)]
+        public void HearGramophoneServerRpc(Vector3 gramophonePosition)
+        {
+            HearGramophoneClientRpc(gramophonePosition);
+        }
+
+        [ClientRpc]
+        public void HearGramophoneClientRpc(Vector3 gramophonePosition)
         {
             if (hasHeardGramophone) return;
             hasHeardGramophone = true;
             timesinceHearingGramophone = 0f;
-            gramoDash = agent.speed * 1.5f;
-            LogIfDebugBuild("The Jinn hears the Gramophone");
+            gramoDash = baseSpeed * 1.5f;
+            targetGramophonePos = gramophonePosition;
 
-            SetDestinationToPosition(gramophonePosition);
+            LogIfDebugBuild("The Jinn hears the Gramophone");
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void CancelGramophoneServerRpc()
+        {
+            CancelGramophoneClientRpc();
+        }
+
+        [ClientRpc]
+        public void CancelGramophoneClientRpc()
+        {
+            if (hasHeardGramophone)
+            {
+                hasHeardGramophone = false;
+                LogIfDebugBuild("Gramophone reached");
+            }
         }
 
         public void DefeatObake()
