@@ -6,10 +6,20 @@ public class GramophoneProp : NetworkBehaviour
 {
     public InteractTrigger windingTrigger;
     public AudioSource windingAudioSource;
+    public AudioSource whisperAudioSource;
     public AudioClip windingLoopSFX;
     public Animator gramophoneAnimator;
 
     private bool isDefeated = false;
+
+    public void Start()
+    {
+        int hintDistance = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnGramoHintDist").Value;
+        if (whisperAudioSource != null)
+        {
+            whisperAudioSource.maxDistance = hintDistance;
+        }
+    }
 
     public void OnWindingStarted()
     {
@@ -71,38 +81,41 @@ public class GramophoneProp : NetworkBehaviour
 
         JinnAI obake = FindObjectOfType<JinnAI>();
 
-        Item gramophoneScrapItem = null;
-        foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
+        bool enableGramophonePrize = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigDropGramoOnDeath").Value;
+        if (enableGramophonePrize)
         {
-            if (item.itemName == "Cursed Gramophone")
+            Item gramophoneScrapItem = null;
+            foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
             {
-                gramophoneScrapItem = item;
-                break;
+                if (item.itemName == "Cursed Gramophone")
+                {
+                    gramophoneScrapItem = item;
+                    break;
+                }
+            }
+
+            if (gramophoneScrapItem != null)
+            {
+                GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, StartOfRound.Instance.propsContainer);
+                GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
+
+                grabbable.fallTime = 0f;
+                grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
+
+                NetworkObject netObj = scrapDrop.GetComponent<NetworkObject>();
+                netObj.Spawn();
+
+                int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
+                grabbable.SetScrapValue(scrapValue);
+
+                // Sync the value to clients!
+                if (obake != null)
+                {
+                    obake.SyncScrapValueClientRpc(netObj, scrapValue);
+                }
             }
         }
-
-        if (gramophoneScrapItem != null)
-        {
-            GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, StartOfRound.Instance.propsContainer);
-            GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
-
-            grabbable.fallTime = 0f;
-            grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
-
-            NetworkObject netObj = scrapDrop.GetComponent<NetworkObject>();
-            netObj.Spawn();
-
-            int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
-            grabbable.SetScrapValue(scrapValue);
-
-            if (obake != null)
-            {
-                obake.SyncScrapValueClientRpc(netObj, scrapValue);
-            }
-        }
-
         if (obake != null) obake.DefeatObakeServerRpc();
-
         NetworkObject.Despawn(true);
     }
 }

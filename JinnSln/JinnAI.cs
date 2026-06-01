@@ -35,6 +35,8 @@ namespace Jinn
 
         public GameObject GramophonePropPrefab;
 
+        private GameObject spawnedGramophone;
+
         private bool hasHeardGramophone = false;
 
         private Vector3 lastPosition;
@@ -60,6 +62,8 @@ namespace Jinn
         private bool wasBeingBurned = false;
 
         public bool isCurrentlyBurning = false;
+
+        private bool isChasingPitch = false;
 
         public Renderer[] rapierRenderers;
 
@@ -133,6 +137,9 @@ namespace Jinn
             burnSlowdown = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBurnSlowdown").Value;
             attackDamage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackDamage").Value;
 
+
+
+
             List<Material> combinedMaterials = new List<Material>();
 
             if (skin != null)
@@ -177,6 +184,16 @@ namespace Jinn
             Plugin.Logger.LogInfo("Ship is leaving! Cleaning up");
 
             if (creatureVoice != null) creatureVoice.Stop();
+
+            if (IsServer && spawnedGramophone != null)
+            {
+                NetworkObject netObj = spawnedGramophone.GetComponent<NetworkObject>();
+                if (netObj != null && netObj.IsSpawned)
+                {
+                    netObj.Despawn(true);
+                }
+            }
+
             KillEnemy(true);
         }
 
@@ -193,6 +210,8 @@ namespace Jinn
         public void SpawnCursedGramophoneLocally()
         {
             if (!IsServer) return;
+            bool enableGramophone = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigCanSpawnGramo").Value;
+            if (!enableGramophone) return;
 
             if (GramophonePropPrefab == null)
             {
@@ -246,15 +265,17 @@ namespace Jinn
             }
 
             safeSpawnPos = GetFloorPosition(safeSpawnPos);
-            GameObject gramophoneProp = Instantiate(GramophonePropPrefab, safeSpawnPos, Quaternion.identity);
-            gramophoneProp.GetComponent<NetworkObject>().Spawn();
+            spawnedGramophone = Instantiate(GramophonePropPrefab, safeSpawnPos, Quaternion.identity);
+            spawnedGramophone.GetComponent<NetworkObject>().Spawn();
 
-            LogIfDebugBuild("Dropped Gramophone PROP at valid node, snapped to the floor!");
+            LogIfDebugBuild("Dropped Gramophone at random node");
         }
 
         public void SpawnRapierLocally()
         {
             if (!IsServer) return;
+            bool enableRapier = JinnContentHandler.Instance.jinnAssets.GetConfig<bool>("ConfigDropRapierOnDeath").Value;
+            if (!enableRapier) return;
             Item rapierItem = null;
             foreach (Item item in StartOfRound.Instance.allItemsList.itemsList)
             {
@@ -322,6 +343,12 @@ namespace Jinn
 
             DrainLocalFlashlightBattery();
 
+            if (creatureVoice != null)
+            {
+                float targetPitch = isChasingPitch ? 0.8f : 1.0f;
+                creatureVoice.pitch = Mathf.Lerp(creatureVoice.pitch, targetPitch, Time.deltaTime * 0.8f);
+            }
+
             if (isEnemyDead) return;
             if (StartOfRound.Instance.allPlayersDead) return;
 
@@ -339,7 +366,6 @@ namespace Jinn
 
             if (isBurnedNow)
             {
-                agent.speed = burnSlowdown;
 
                 if (!wasBeingBurned)
                 {
@@ -428,14 +454,18 @@ namespace Jinn
                     continuousChaseTimer = 0f;
                     tpRollTimer = 0f;
                 }
-                if (hasHeardGramophone)
+                if (isCurrentlyBurning)
+                {
+                    agent.speed = burnSlowdown;
+                }
+                else if (hasHeardGramophone)
                 {
                     agent.speed = gramoDash;
 
                     if (timesinceHearingGramophone > 35f)
                     {
                         hasHeardGramophone = false;
-                        LogIfDebugBuild("Gramophone timeout reached. Baclk to normal speed.");
+                        LogIfDebugBuild("Gramophone timeout reached. Back to normal speed.");
                     }
                 }
                 else if (timeSinceLastAttack < 2f)
@@ -476,6 +506,7 @@ namespace Jinn
                 if (CheckLineOfSightForPosition(targetPlayer.gameplayCamera.transform.position, 120f, 60))
                 {
                     hasLOS = true;
+                    if (!isChasingPitch) SetPitchStateServerRpc(true);
                     timeSinceSeen = 0f;
                     chaseTimer = 10f;
                     lastPosition = targetPlayer.transform.position;
@@ -490,6 +521,7 @@ namespace Jinn
 
                     if (chaseTimer <= 0f)
                     {
+                        if (isChasingPitch) SetPitchStateServerRpc(false);
                         CheckAndFireLastDitchTeleport();
 
                         targetPlayer = null;
@@ -518,6 +550,7 @@ namespace Jinn
                 if (TargetClosestPlayer(5f, requireLineOfSight: true, 120f))
                 {
                     hasLOS = true;
+                    if (!isChasingPitch) SetPitchStateServerRpc(true);
                     timeSinceSeen = 0f;
                     chaseTimer = 10f;
                     lastPosition = targetPlayer.transform.position;
@@ -528,9 +561,22 @@ namespace Jinn
                 }
                 else if (currentSearch == null || !currentSearch.inProgress)
                 {
+                    if (isChasingPitch) SetPitchStateServerRpc(false);
                     StartSearch(base.transform.position);
                 }
             }
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void SetPitchStateServerRpc(bool chasing)
+        {
+            SetPitchStateClientRpc(chasing);
+        }
+
+        [ClientRpc]
+        public void SetPitchStateClientRpc(bool chasing)
+        {
+            isChasingPitch = chasing;
         }
 
         private void CheckAndFireLastDitchTeleport()
@@ -626,13 +672,16 @@ namespace Jinn
 
                 if (player.pocketedFlashlight != null && player.pocketedFlashlight.isBeingUsed)
                 {
-                    return true;
+                    if (player.pocketedFlashlight.insertedBattery != null && player.pocketedFlashlight.insertedBattery.charge > 0f)
+                    {
+                        return true;
+                    }
                 }
 
                 GrabbableObject heldItem = player.currentlyHeldObjectServer;
-                if (player.isHoldingObject && heldItem != null)
+                if (player.isHoldingObject && heldItem != null && heldItem is FlashlightItem flashlight)
                 {
-                    if (heldItem is FlashlightItem flashlight && flashlight.isBeingUsed)
+                    if (flashlight.isBeingUsed && flashlight.insertedBattery != null && flashlight.insertedBattery.charge > 0f)
                     {
                         return true;
                     }
@@ -933,6 +982,8 @@ namespace Jinn
                         activeFlashlight.insertedBattery.empty = true;
                         activeFlashlight.UseUpBatteries();
                         activeFlashlight.flashlightInterferenceLevel = 0;
+
+                        activeFlashlight.SyncBatteryServerRpc(0);
                     }
                 }
             }
