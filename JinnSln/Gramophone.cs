@@ -108,7 +108,7 @@ public class GramophoneProp : NetworkBehaviour
                 int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
                 grabbable.SetScrapValue(scrapValue);
 
-                // Sync the value to clients!
+                // Sync the value to clients, otherwise there is no value (cursed gramo prefab)
                 if (obake != null)
                 {
                     obake.SyncScrapValueClientRpc(netObj, scrapValue);
