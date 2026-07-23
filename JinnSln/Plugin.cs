@@ -7,6 +7,8 @@ using HarmonyLib;
 using System.IO;
 using System.Reflection;
 using UnityEngine;
+using UnityEngine.Networking;
+using System.Collections;
 
 namespace Jinn
 {
@@ -16,12 +18,14 @@ namespace Jinn
     {
         public const string modGUID = "reiko888.Jinn";
         public const string modName = "Jinn";
-        public const string modVersion = "1.0.1";
+        public const string modVersion = "1.0.2";
 
         public static Plugin Instance = null!;
         internal static new ManualLogSource Logger = null!;
         internal static readonly Harmony harmony = new Harmony(modGUID);
         internal static DuskMod mod = null!;
+
+
 
         private void Awake()
         {
@@ -43,5 +47,6 @@ namespace Jinn
             harmony.PatchAll(Assembly.GetExecutingAssembly());
             Logger.LogInfo($"Plugin {modName} is loaded!");
         }
+
     }
 }

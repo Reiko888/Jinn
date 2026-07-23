@@ -96,19 +96,21 @@ public class GramophoneProp : NetworkBehaviour
 
             if (gramophoneScrapItem != null)
             {
-                GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, transform.position, transform.rotation, StartOfRound.Instance.propsContainer);
+                Vector3 dropPos = transform.position + (Vector3.up * 1.5f);
+                GameObject scrapDrop = Instantiate(gramophoneScrapItem.spawnPrefab, dropPos, transform.rotation, StartOfRound.Instance.propsContainer);
                 GrabbableObject grabbable = scrapDrop.GetComponent<GrabbableObject>();
 
                 grabbable.fallTime = 0f;
-                grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(transform.position);
+                grabbable.targetFloorPosition = grabbable.GetItemFloorPosition(dropPos);
+                int minvalue = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigMinGramoScrapValue").Value;
+                int maxvalue = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigMaxGramoScrapValue").Value;
+                int scrapValue = (int)(UnityEngine.Random.Range(minvalue, maxvalue));
+
+                grabbable.SetScrapValue(scrapValue);
 
                 NetworkObject netObj = scrapDrop.GetComponent<NetworkObject>();
                 netObj.Spawn();
 
-                int scrapValue = (int)(UnityEngine.Random.Range(150, 350) * RoundManager.Instance.scrapValueMultiplier);
-                grabbable.SetScrapValue(scrapValue);
-
-                // Sync the value to clients, otherwise there is no value (cursed gramo prefab)
                 if (obake != null)
                 {
                     obake.SyncScrapValueClientRpc(netObj, scrapValue);

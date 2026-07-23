@@ -194,6 +194,15 @@ namespace Jinn
                 }
             }
 
+            if (IsServer && currentNetworkSwirl != null)
+            {
+                NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+                if (netObj != null && netObj.IsSpawned)
+                {
+                    netObj.Despawn(true);
+                }
+            }
+
             KillEnemy(true);
         }
 
@@ -305,7 +314,7 @@ namespace Jinn
             rapierGrabbable.fallTime = 0f;
             rapierGrabbable.targetFloorPosition = rapierGrabbable.GetItemFloorPosition(safeSpawnPos);
 
-            int scrapValue = (int)(UnityEngine.Random.Range(rapierItem.minValue, rapierItem.maxValue) * RoundManager.Instance.scrapValueMultiplier);
+            int scrapValue = (int)(UnityEngine.Random.Range(rapierItem.minValue, rapierItem.maxValue));
             rapierGrabbable.SetScrapValue(scrapValue);
 
             NetworkObject netObj = rapierDrop.GetComponent<NetworkObject>();
@@ -320,6 +329,21 @@ namespace Jinn
         [ClientRpc]
         public void SyncScrapValueClientRpc(NetworkObjectReference netObjRef, int scrapValue)
         {
+            if (RoundManager.Instance != null)
+            {
+                RoundManager.Instance.StartCoroutine(DelayedScrapValueSync(netObjRef, scrapValue));
+            }
+            else
+            {
+
+                StartCoroutine(DelayedScrapValueSync(netObjRef, scrapValue));
+            }
+        }
+
+        private IEnumerator DelayedScrapValueSync(NetworkObjectReference netObjRef, int scrapValue)
+        {
+            yield return new WaitForSeconds(1f);
+
             if (netObjRef.TryGet(out NetworkObject netObj))
             {
                 GrabbableObject grabObj = netObj.GetComponent<GrabbableObject>();
@@ -567,6 +591,48 @@ namespace Jinn
             }
         }
 
+        public override void OnDestroy()
+        {
+            base.OnDestroy();
+            ResetAllFlashlightInterference();
+
+            if (creatureVoice != null) creatureVoice.Stop();
+
+            if (IsServer)
+            {
+                if (spawnedGramophone != null)
+                {
+                    NetworkObject netObj = spawnedGramophone.GetComponent<NetworkObject>();
+                    if (netObj != null && netObj.IsSpawned) netObj.Despawn(true);
+                }
+
+                if (currentNetworkSwirl != null)
+                {
+                    NetworkObject netObj = currentNetworkSwirl.GetComponent<NetworkObject>();
+                    if (netObj != null && netObj.IsSpawned) netObj.Despawn(true);
+                }
+            }
+
+            LogIfDebugBuild("OnDestroy successful.");
+        }
+
+        private void ResetAllFlashlightInterference()
+        {
+            if (GameNetworkManager.Instance == null || GameNetworkManager.Instance.localPlayerController == null) return;
+
+            PlayerControllerB localPlayer = GameNetworkManager.Instance.localPlayerController;
+
+            if (localPlayer.pocketedFlashlight != null && localPlayer.pocketedFlashlight is FlashlightItem pocketLight)
+            {
+                pocketLight.flashlightInterferenceLevel = 0;
+            }
+
+            if (localPlayer.currentlyHeldObjectServer != null && localPlayer.currentlyHeldObjectServer is FlashlightItem heldLight)
+            {
+                heldLight.flashlightInterferenceLevel = 0;
+            }
+        }
+
         [ServerRpc(RequireOwnership = false)]
         public void SetPitchStateServerRpc(bool chasing)
         {
@@ -711,6 +777,7 @@ namespace Jinn
             else
             {
                 if (creatureVoice != null) creatureVoice.Play();
+                ResetAllFlashlightInterference();
             }
         }
 
@@ -957,8 +1024,9 @@ namespace Jinn
 
             if (activeFlashlight != null)
             {
-
-                if (dist > 30f || !activeFlashlight.isBeingUsed)
+                Vector3 directionToObake = transform.position - localPlayer.transform.position;
+                float viewAngle = Vector3.Angle(localPlayer.transform.forward, directionToObake);
+                if (dist > 30f || !activeFlashlight.isBeingUsed || Mathf.Abs(viewAngle) > 30f)
                 {
                     if (activeFlashlight.flashlightInterferenceLevel == 1)
                     {
@@ -1083,6 +1151,12 @@ namespace Jinn
             LogIfDebugBuild("Gramophone fully wound");
 
             DefeatObakeServerRpc();
+        }
+
+        public override void KillEnemy(bool destroy = false)
+        {
+            base.KillEnemy(destroy);
+            ResetAllFlashlightInterference();
         }
 
         [ServerRpc(RequireOwnership = false)]

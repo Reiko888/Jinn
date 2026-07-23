@@ -248,7 +248,7 @@ namespace Obake
                 Debug.Log($"[RapierDebug-Attack] Swing valid. Cooldown cleared ({timeSinceLastHit}s elapsed). Casting sphere...");
                 previousPlayerHeldBy.twoHanded = false;
 
-                objectsHitByRapier = Physics.SphereCastAll(previousPlayerHeldBy.gameplayCamera.transform.position + previousPlayerHeldBy.gameplayCamera.transform.right * 0.1f, 0.3f, previousPlayerHeldBy.gameplayCamera.transform.forward, 2f, rapierMask, QueryTriggerInteraction.Collide);
+                objectsHitByRapier = Physics.SphereCastAll(previousPlayerHeldBy.gameplayCamera.transform.position + previousPlayerHeldBy.gameplayCamera.transform.right * 0.1f, 0.8f, previousPlayerHeldBy.gameplayCamera.transform.forward, 3f, rapierMask, QueryTriggerInteraction.Collide);
                 objectsHitByRapierList = objectsHitByRapier.OrderBy((RaycastHit x) => x.distance).ToList();
 
                 Debug.Log($"[RapierDebug-Attack] SphereCast found {objectsHitByRapierList.Count} colliders.");
@@ -361,18 +361,18 @@ namespace Obake
                     if (rapierAudio != null) rapierAudio.PlayOneShot(StartOfRound.Instance.footstepSurfaces[num].hitSurfaceSFX);
                     if (rapierAudio != null) WalkieTalkie.TransmitOneShotAudio(rapierAudio, StartOfRound.Instance.footstepSurfaces[num].hitSurfaceSFX);
                 }
-                HitRapierServerRpc(num);
+                HitRapierServerRpc(num, flag2);
             }
         }
 
         [ServerRpc]
-        public void HitRapierServerRpc(int hitSurfaceID)
+        public void HitRapierServerRpc(int hitSurfaceID, bool hitFlesh)
         {
-            HitRapierClientRpc(hitSurfaceID);
+            HitRapierClientRpc(hitSurfaceID, hitFlesh);
         }
 
         [ClientRpc]
-        public void HitRapierClientRpc(int hitSurfaceID)
+        public void HitRapierClientRpc(int hitSurfaceID, bool hitFlesh)
         {
             if (!base.IsOwner)
             {
@@ -389,6 +389,11 @@ namespace Obake
                         rapierAudio.PlayOneShot(StartOfRound.Instance.footstepSurfaces[hitSurfaceID].hitSurfaceSFX);
                         WalkieTalkie.TransmitOneShotAudio(rapierAudio, StartOfRound.Instance.footstepSurfaces[hitSurfaceID].hitSurfaceSFX);
                     }
+                }
+
+                if (hitFlesh && bloodParticle != null)
+                {
+                    bloodParticle.Play(withChildren: true);
                 }
             }
         }
