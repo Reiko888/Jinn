@@ -18,7 +18,7 @@ namespace Jinn
     {
         public const string modGUID = "reiko888.Jinn";
         public const string modName = "Jinn";
-        public const string modVersion = "1.0.2";
+        public const string modVersion = "1.1.0";
 
         public static Plugin Instance = null!;
         internal static new ManualLogSource Logger = null!;

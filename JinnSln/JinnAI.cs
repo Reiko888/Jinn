@@ -1273,7 +1273,7 @@ namespace Jinn
             gramoDash = baseSpeed * gramoDashMult;
             playerWinding = playerClientId;
             PlayerControllerB windingPlayer = StartOfRound.Instance.allPlayerScripts[playerClientId];
-            Plugin.Logger.LogInfo($"HearGramophoneClientRpc: playerClientId={playerClientId}, windingPlayer={windingPlayer?.playerUsername}, flyingAudio={(flyingAudio != null)}, flyingClips={(flyingClips != null ? flyingClips.Length.ToString() : "null")}, whooshAudio={(whooshAudio != null)}, whooshSFX={(whooshSFX != null ? whooshSFX.name : "null")}");
+            //Plugin.Logger.LogInfo($"HearGramophoneClientRpc: playerClientId={playerClientId}, windingPlayer={windingPlayer?.playerUsername}, flyingAudio={(flyingAudio != null)}, flyingClips={(flyingClips != null ? flyingClips.Length.ToString() : "null")}, whooshAudio={(whooshAudio != null)}, whooshSFX={(whooshSFX != null ? whooshSFX.name : "null")}");
             if (windingPlayer != null && !windingPlayer.isPlayerDead)
             {
                 targetPlayer = windingPlayer;
