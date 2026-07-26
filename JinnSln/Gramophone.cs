@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using Unity.Netcode;
 using Jinn;
 
@@ -11,6 +11,7 @@ public class GramophoneProp : NetworkBehaviour
     public Animator gramophoneAnimator;
 
     private bool isDefeated = false;
+    private int playerWinding;
 
     public void Start()
     {
@@ -21,15 +22,20 @@ public class GramophoneProp : NetworkBehaviour
         }
     }
 
-    public void OnWindingStarted()
+    public void OnWindingStarted(GameNetcodeStuff.PlayerControllerB playerWinding)
     {
         if (isDefeated) return;
         SetWindingStateServerRpc(true);
 
-        JinnAI obake = FindObjectOfType<JinnAI>();
-        if (obake != null)
+        if (playerWinding == null && GameNetworkManager.Instance != null)
         {
-            obake.HearGramophoneServerRpc(transform.position);
+            playerWinding = GameNetworkManager.Instance.localPlayerController;
+        }
+
+        JinnAI obake = FindObjectOfType<JinnAI>();
+        if (obake != null && playerWinding != null)
+        {
+            obake.HearGramophoneServerRpc((int)playerWinding.playerClientId);
         }
     }
 

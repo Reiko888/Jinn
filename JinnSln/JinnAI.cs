@@ -1,8 +1,9 @@
-﻿using GameNetcodeStuff;
+using GameNetcodeStuff;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Unity.Netcode;
+using Unity.Services.Authentication.Generated;
 using UnityEngine;
 
 namespace Jinn
@@ -24,86 +25,56 @@ namespace Jinn
         private int burnSlowdown;
         private int attackDamage;
         public SkinnedMeshRenderer skin;
-
         public Material[] thisMaterial;
-
         public GameObject BloodParticles;
-
         public GameObject TeleportSwirl;
-
         private GameObject currentNetworkSwirl;
-
         public GameObject GramophonePropPrefab;
-
         private GameObject spawnedGramophone;
-
         private bool hasHeardGramophone = false;
-
         private Vector3 lastPosition;
-
         private bool hasLOS;
-
         public float chaseTimer = 0f;
-
         private bool isPreparingTeleport = false;
-
         private float teleportWarningTimer = 0f;
-
         private Vector3 pendingTeleportPosition;
-
         private PlayerControllerB pendingTeleportTarget;
-
         private bool hasAttemptedLastDitchTp = false;
-
         private bool isManifesting = false;
-
         private bool isFlickeringLights = false;
-
         private bool wasBeingBurned = false;
-
         public bool isCurrentlyBurning = false;
-
         private bool isChasingPitch = false;
-
+        private bool isCloseToTarget = false;
         public Renderer[] rapierRenderers;
-
         private float gramoDash;
-
         private float timeSinceLastAttack;
-
         private float timeSinceSeen;
-
         private float timesinceHearingGramophone;
-
         private float tpRollTimer;
-
         private float continuousChaseTimer = 0f;
-
         public float teleportCooldown = 15f;
-
         private float teleportCooldownTimer = 0f;
-
-        private Vector3 targetGramophonePos;
-
+        private float flyingAudioCooldownTimer = 0f;
+        private int playerWinding;
+        private DoorLock[] cachedDoors;
+        private Dictionary<DoorLock, float> doorSlamCooldowns = new Dictionary<DoorLock, float>();
 
         //AUDIO
         public AudioSource movementAudio;
-
+        public AudioSource flyingAudio;
+        public AudioSource whooshAudio;
+        public AudioClip whooshSFX;
+        public AudioClip[] flyingClips;
         public AudioClip unsheathSFX;
-
         public AudioClip laughSFX;
-
         public AudioClip swingSFX;
-
         public AudioClip[] teleportSFX;
-
         public AudioClip chargeUpTPSFX;
-
         public AudioClip creaturePainSFX;
 
         //PARTICLES
         public ParticleSystem mistParticles;
-
         public ParticleSystem decayingMatterParticles;
 
         [Conditional("DEBUG")]
@@ -122,7 +93,6 @@ namespace Jinn
         public override void Start()
         {
             base.Start();
-            updatePositionThreshold = 0.5f;
             baseSpeed = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBaseSpeed").Value;
             attackCooldownSlow = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackCooldownSlow").Value;
             minDistance = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnMinVisibleDist").Value;
@@ -136,9 +106,6 @@ namespace Jinn
             flashlightDrainPercentage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnFlashlightConsumption").Value;
             burnSlowdown = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBurnSlowdown").Value;
             attackDamage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackDamage").Value;
-
-
-
 
             List<Material> combinedMaterials = new List<Material>();
 
@@ -158,6 +125,7 @@ namespace Jinn
             }
             thisMaterial = combinedMaterials.ToArray();
             base.GetAINodes();
+            cachedDoors = UnityEngine.Object.FindObjectsOfType<DoorLock>();
 
             enemyRandom = new System.Random(StartOfRound.Instance.randomMapSeed + thisEnemyIndex);
             if (creatureVoice != null)
@@ -357,6 +325,49 @@ namespace Jinn
         public override void Update()
         {
             base.Update();
+            if (creatureAnimator != null)
+            {
+                creatureAnimator.SetBool("isFlying", hasHeardGramophone);
+            }
+            if (flyingAudioCooldownTimer > 0f)
+            {
+                flyingAudioCooldownTimer -= Time.deltaTime;
+            }
+            if (flyingAudio != null && flyingClips != null && flyingClips.Length > 0)
+            {
+                if (hasHeardGramophone)
+                {
+                    if (!flyingAudio.isPlaying && flyingAudioCooldownTimer <= 0f)
+                    {
+                        AudioClip clip = flyingClips[enemyRandom.Next(0, flyingClips.Length)];
+                        if (clip != null)
+                        {
+                            flyingAudio.clip = clip;
+                            flyingAudio.Play();
+                            flyingAudioCooldownTimer = 15f;
+                        }
+                    }
+                }
+                else if (!hasHeardGramophone && flyingAudio.isPlaying)
+                {
+                    flyingAudio.Stop();
+                }
+            }
+            if (whooshAudio != null && whooshSFX != null)
+            {
+                if (hasHeardGramophone)
+                {
+                    if (!whooshAudio.isPlaying)
+                    {
+                        whooshAudio.clip = whooshSFX;
+                        whooshAudio.Play();
+                    }
+                }
+                else if (!hasHeardGramophone && whooshAudio.isPlaying)
+                {
+                    whooshAudio.Stop();
+                }
+            }
             timeSinceLastAttack += Time.deltaTime;
             if (isCurrentlyBurning)
             {
@@ -371,6 +382,20 @@ namespace Jinn
             {
                 float targetPitch = isChasingPitch ? 0.8f : 1.0f;
                 creatureVoice.pitch = Mathf.Lerp(creatureVoice.pitch, targetPitch, Time.deltaTime * 0.8f);
+                if (isCurrentlyBurning || hasHeardGramophone)
+                {
+                    if (creatureVoice.isPlaying)
+                    {
+                        creatureVoice.Pause();
+                    }
+                }
+                else
+                {
+                    if (!creatureVoice.isPlaying && !isEnemyDead)
+                    {
+                        creatureVoice.Play();
+                    }
+                }
             }
 
             if (isEnemyDead) return;
@@ -382,6 +407,8 @@ namespace Jinn
             }
 
             if (!base.IsOwner) return;
+
+            SlamNearbyDoorsCheck();
 
             timeSinceSeen += Time.deltaTime;
             timesinceHearingGramophone += Time.deltaTime;
@@ -423,6 +450,7 @@ namespace Jinn
                 {
                     isManifesting = false;
                 }
+                isCloseToTarget = distToTarget <= 10f;
             }
             else
             {
@@ -486,10 +514,10 @@ namespace Jinn
                 {
                     agent.speed = gramoDash;
 
-                    if (timesinceHearingGramophone > 35f)
+                    if (isCloseToTarget || timesinceHearingGramophone > 35f)
                     {
-                        hasHeardGramophone = false;
-                        LogIfDebugBuild("Gramophone timeout reached. Back to normal speed.");
+                        isCloseToTarget = false;
+                        CancelGramophoneServerRpc();
                     }
                 }
                 else if (timeSinceLastAttack < 2f)
@@ -509,23 +537,7 @@ namespace Jinn
         {
             base.DoAIInterval();
             if (isEnemyDead || StartOfRound.Instance.allPlayersDead) return;
-
-            if (hasHeardGramophone)
-            {
-                if (Vector3.Distance(transform.position, targetGramophonePos) <= 3f)
-                {
-                    hasHeardGramophone = false;
-                    CancelGramophoneServerRpc();
-                }
-                else
-                {
-                    moveTowardsDestination = true;
-                    SetDestinationToPosition(targetGramophonePos, checkForPath: true);
-                    return;
-                }
-            }
-
-            if (targetPlayer != null)
+            if (targetPlayer != null && !hasHeardGramophone)
             {
                 if (CheckLineOfSightForPosition(targetPlayer.gameplayCamera.transform.position, 120f, 60))
                 {
@@ -567,6 +579,19 @@ namespace Jinn
                     }
                 }
             }
+            else if (hasHeardGramophone)
+            {
+                if (targetPlayer != null && !targetPlayer.isPlayerDead)
+                {
+                    if (currentSearch != null && currentSearch.inProgress) StopSearch(currentSearch);
+                    SetDestinationToPosition(targetPlayer.transform.position);
+                }
+                else
+                {
+                    hasHeardGramophone = false;
+                    CancelGramophoneServerRpc();
+                }
+            }
             else
             {
                 hasLOS = false;
@@ -589,6 +614,7 @@ namespace Jinn
                     StartSearch(base.transform.position);
                 }
             }
+            if (IsServer) UpdateJinnOwnership();
         }
 
         public override void OnDestroy()
@@ -647,6 +673,7 @@ namespace Jinn
 
         private void CheckAndFireLastDitchTeleport()
         {
+            if (hasHeardGramophone) return;
             if (!hasAttemptedLastDitchTp && !isPreparingTeleport && targetPlayer != null && teleportCooldownTimer <= 0f)
             {
                 hasAttemptedLastDitchTp = true;
@@ -661,6 +688,7 @@ namespace Jinn
 
         private void TpToCutoffNode(PlayerControllerB targetPlayer)
         {
+            if (hasHeardGramophone) return;
             if (!canTeleport) return;
 
             if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
@@ -744,7 +772,7 @@ namespace Jinn
                     }
                 }
 
-                GrabbableObject heldItem = player.currentlyHeldObjectServer;
+                GrabbableObject heldItem = player.currentlyHeldObject;
                 if (player.isHoldingObject && heldItem != null && heldItem is FlashlightItem flashlight)
                 {
                     if (flashlight.isBeingUsed && flashlight.insertedBattery != null && flashlight.insertedBattery.charge > 0f)
@@ -798,45 +826,79 @@ namespace Jinn
         {
             isFlickeringLights = true;
 
-            Light[] allLights = FindObjectsOfType<Light>();
-            Dictionary<Light, float> originalIntensities = new Dictionary<Light, float>();
-            List<Light> nearbyLights = new List<Light>();
-
-            float radiusSq = 10f * 10f;
-
-            foreach (Light l in allLights)
+            List<FlashlightItem> flashlightsNearJinn = new List<FlashlightItem>();
+            FlashlightItem[] allFlashlights = UnityEngine.Object.FindObjectsOfType<FlashlightItem>();
+            if (allFlashlights != null)
             {
-                if (l == null || l.type == LightType.Directional) continue;
-
-                string nameLower = l.gameObject.name.ToLower();
-                if (nameLower.Contains("helmet") || nameLower.Contains("visor") || nameLower.Contains("sun")) continue;
-
-                if ((l.transform.position - transform.position).sqrMagnitude <= radiusSq)
+                for (int i = 0; i < allFlashlights.Length; i++)
                 {
-                    nearbyLights.Add(l);
-                    originalIntensities[l] = l.intensity;
-                }
-            }
-
-            while (stunNormalizedTimer > 0f && !isEnemyDead)
-            {
-                foreach (Light l in nearbyLights)
-                {
-                    if (l != null && originalIntensities.ContainsKey(l))
+                    FlashlightItem fl = allFlashlights[i];
+                    if (fl != null && fl.playerHeldBy != null && Vector3.Distance(fl.playerHeldBy.transform.position, transform.position) <= 15f)
                     {
-                        float rand = UnityEngine.Random.value;
-                        if (rand > 0.8f) l.intensity = originalIntensities[l] * 2.5f; // Intense flash
-                        else if (rand > 0.5f) l.intensity = originalIntensities[l] * 0.1f; // Dim out
-                        else l.intensity = originalIntensities[l]; // Normal
+                        flashlightsNearJinn.Add(fl);
                     }
                 }
-
-                yield return new WaitForSeconds(0.1f);
             }
 
-            foreach (var kvp in originalIntensities)
+            for (int i = 0; i < flashlightsNearJinn.Count; i++)
             {
-                if (kvp.Key != null) kvp.Key.intensity = kvp.Value;
+                FlashlightItem fl = flashlightsNearJinn[i];
+                if (fl != null)
+                {
+                    if (fl.flashlightAudio != null && fl.flashlightFlicker != null)
+                    {
+                        fl.flashlightAudio.PlayOneShot(fl.flashlightFlicker);
+                        WalkieTalkie.TransmitOneShotAudio(fl.flashlightAudio, fl.flashlightFlicker, 0.8f);
+                    }
+                    if (fl.playerHeldBy != null && fl.playerHeldBy.isInsideFactory)
+                    {
+                        fl.flashlightInterferenceLevel = 2;
+                    }
+                }
+            }
+
+            List<Animator> lightsNearJinn = new List<Animator>();
+            if (RoundManager.Instance != null && RoundManager.Instance.allPoweredLightsAnimators != null)
+            {
+                for (int i = 0; i < RoundManager.Instance.allPoweredLightsAnimators.Count; i++)
+                {
+                    Animator animator = RoundManager.Instance.allPoweredLightsAnimators[i];
+                    if (animator != null && Vector3.Distance(animator.transform.position, transform.position) <= 15f)
+                    {
+                        lightsNearJinn.Add(animator);
+                    }
+                }
+            }
+
+            if (lightsNearJinn.Count > 0)
+            {
+                int loopCount = 0;
+                int b = 4;
+                while (b > 0 && b != 0)
+                {
+                    int limit = lightsNearJinn.Count / b;
+                    for (int j = loopCount; j < limit; j++)
+                    {
+                        if (j < lightsNearJinn.Count && lightsNearJinn[j] != null)
+                        {
+                            lightsNearJinn[j].SetTrigger("Flicker");
+                        }
+                        loopCount++;
+                    }
+                    yield return new WaitForSeconds(0.05f);
+                    b--;
+                }
+            }
+
+            yield return new WaitForSeconds(0.3f);
+
+            for (int i = 0; i < flashlightsNearJinn.Count; i++)
+            {
+                FlashlightItem fl = flashlightsNearJinn[i];
+                if (fl != null)
+                {
+                    fl.flashlightInterferenceLevel = 0;
+                }
             }
 
             isFlickeringLights = false;
@@ -844,6 +906,7 @@ namespace Jinn
 
         private void TpNearestNode(PlayerControllerB targetPlayer)
         {
+            if (hasHeardGramophone) return;
             if (!canTeleport) return;
 
             if (targetPlayer == null || targetPlayer.isPlayerDead || allAINodes == null || allAINodes.Length == 0) return;
@@ -1017,7 +1080,7 @@ namespace Jinn
             {
                 activeFlashlight = pocketLight;
             }
-            else if (localPlayer.currentlyHeldObjectServer != null && localPlayer.currentlyHeldObjectServer is FlashlightItem heldLight)
+            else if (localPlayer.currentlyHeldObject != null && localPlayer.currentlyHeldObject is FlashlightItem heldLight)
             {
                 activeFlashlight = heldLight;
             }
@@ -1054,6 +1117,55 @@ namespace Jinn
                         activeFlashlight.SyncBatteryServerRpc(0);
                     }
                 }
+            }
+        }
+
+        private void SlamNearbyDoorsCheck()
+        {
+            if (cachedDoors == null) return;
+
+            foreach (DoorLock door in cachedDoors)
+            {
+                if (door == null) continue;
+
+                if (Vector3.Distance(door.transform.position, transform.position) < 3f)
+                {
+                    if (!door.isDoorOpened && (!doorSlamCooldowns.ContainsKey(door) || (Time.time - doorSlamCooldowns[door] >= 5f)))
+                    {
+                        if (door.isLocked)
+                        {
+                            door.UnlockDoorServerRpc();
+                        }
+                        AnimatedObjectTrigger component = door.GetComponent<AnimatedObjectTrigger>();
+                        if (component != null)
+                        {
+                            component.TriggerAnimationNonPlayer(true, true, false);
+                        }
+                        door.OpenDoorAsEnemyServerRpc();
+                        doorSlamCooldowns[door] = Time.time;
+                    }
+                }
+            }
+        }
+
+        private void UpdateJinnOwnership()
+        {
+            if (!IsServer) return;
+            if (isEnemyDead) return;
+
+            ulong targetOwnerId = 0UL;
+            if (hasHeardGramophone && targetPlayer != null)
+            {
+                targetOwnerId = targetPlayer.actualClientId;
+            }
+            else if (targetPlayer != null)
+            {
+                targetOwnerId = targetPlayer.actualClientId;
+            }
+
+            if (NetworkObject.OwnerClientId != targetOwnerId)
+            {
+                ChangeOwnershipOfEnemy(targetOwnerId);
             }
         }
 
@@ -1112,21 +1224,28 @@ namespace Jinn
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void HearGramophoneServerRpc(Vector3 gramophonePosition)
+        public void HearGramophoneServerRpc(int playerClientId)
         {
-            HearGramophoneClientRpc(gramophonePosition);
+            HearGramophoneClientRpc(playerClientId);
         }
 
         [ClientRpc]
-        public void HearGramophoneClientRpc(Vector3 gramophonePosition)
+        public void HearGramophoneClientRpc(int playerClientId)
         {
             if (hasHeardGramophone) return;
             hasHeardGramophone = true;
             timesinceHearingGramophone = 0f;
-            gramoDash = baseSpeed * 1.5f;
-            targetGramophonePos = gramophonePosition;
-
+            gramoDash = baseSpeed * 2.5f;
+            playerWinding = playerClientId;
+            PlayerControllerB windingPlayer = StartOfRound.Instance.allPlayerScripts[playerClientId];
+            Plugin.Logger.LogInfo($"HearGramophoneClientRpc: playerClientId={playerClientId}, windingPlayer={windingPlayer?.playerUsername}, flyingAudio={(flyingAudio != null)}, flyingClips={(flyingClips != null ? flyingClips.Length.ToString() : "null")}, whooshAudio={(whooshAudio != null)}, whooshSFX={(whooshSFX != null ? whooshSFX.name : "null")}");
+            if (windingPlayer != null && !windingPlayer.isPlayerDead)
+            {
+                targetPlayer = windingPlayer;
+                SetDestinationToPosition(windingPlayer.transform.position);
+            }
             LogIfDebugBuild("The Jinn hears the Gramophone");
+            if (IsServer) UpdateJinnOwnership();
         }
 
         [ServerRpc(RequireOwnership = false)]
@@ -1142,6 +1261,7 @@ namespace Jinn
             {
                 hasHeardGramophone = false;
                 LogIfDebugBuild("Gramophone reached");
+                if (IsServer) UpdateJinnOwnership();
             }
         }
 
@@ -1185,6 +1305,10 @@ namespace Jinn
                 creatureVoice.Stop();
             }
             SpawnRapierLocally();
+            if (IsServer)
+            {
+                ChangeOwnershipOfEnemy(0UL);
+            }
             base.KillEnemy(true);
         }
 
