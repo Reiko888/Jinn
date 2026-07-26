@@ -46,8 +46,12 @@ namespace Jinn
         public bool isCurrentlyBurning = false;
         private bool isChasingPitch = false;
         private bool isCloseToTarget = false;
+        private int rapierMinValue;
+        private int rapierMaxValue;
+        private float searchMusicDistance;
         public Renderer[] rapierRenderers;
         private float gramoDash;
+        private float gramoDashMult;
         private float timeSinceLastAttack;
         private float timeSinceSeen;
         private float timesinceHearingGramophone;
@@ -106,6 +110,10 @@ namespace Jinn
             flashlightDrainPercentage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnFlashlightConsumption").Value;
             burnSlowdown = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnBurnSlowdown").Value;
             attackDamage = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigJinnAttackDamage").Value;
+            gramoDashMult = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigGramophoneSpeedMultiplier").Value;
+            rapierMinValue = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigMinRapierScrapValue").Value;
+            rapierMaxValue = JinnContentHandler.Instance.jinnAssets.GetConfig<int>("ConfigMaxRapierScrapValue").Value;
+            searchMusicDistance = JinnContentHandler.Instance.jinnAssets.GetConfig<float>("ConfigJinnSearchMusicDistance").Value;
 
             List<Material> combinedMaterials = new List<Material>();
 
@@ -130,6 +138,7 @@ namespace Jinn
             enemyRandom = new System.Random(StartOfRound.Instance.randomMapSeed + thisEnemyIndex);
             if (creatureVoice != null)
             {
+                creatureVoice.maxDistance = searchMusicDistance;
                 creatureVoice.Play();
             }
 
@@ -282,7 +291,7 @@ namespace Jinn
             rapierGrabbable.fallTime = 0f;
             rapierGrabbable.targetFloorPosition = rapierGrabbable.GetItemFloorPosition(safeSpawnPos);
 
-            int scrapValue = (int)(UnityEngine.Random.Range(rapierItem.minValue, rapierItem.maxValue));
+            int scrapValue = (int)(UnityEngine.Random.Range(rapierMinValue, rapierMaxValue + 1));
             rapierGrabbable.SetScrapValue(scrapValue);
 
             NetworkObject netObj = rapierDrop.GetComponent<NetworkObject>();
@@ -325,6 +334,10 @@ namespace Jinn
         public override void Update()
         {
             base.Update();
+            if (IsServer)
+            {
+                UpdateJinnOwnership();
+            }
             if (creatureAnimator != null)
             {
                 creatureAnimator.SetBool("isFlying", hasHeardGramophone);
@@ -398,7 +411,35 @@ namespace Jinn
                 }
             }
 
-            if (isEnemyDead) return;
+            if (isEnemyDead)
+            {
+                agent.speed = 0f;
+                return;
+            }
+
+            if (isCurrentlyBurning)
+            {
+                agent.speed = burnSlowdown;
+            }
+            else if (hasHeardGramophone)
+            {
+                agent.speed = gramoDash;
+
+                if (base.IsOwner && (isCloseToTarget || timesinceHearingGramophone > 35f))
+                {
+                    isCloseToTarget = false;
+                    CancelGramophoneServerRpc();
+                }
+            }
+            else if (timeSinceLastAttack < 2f)
+            {
+                agent.speed = attackCooldownSlow;
+            }
+            else
+            {
+                agent.speed = baseSpeed;
+            }
+
             if (StartOfRound.Instance.allPlayersDead) return;
 
             if (!hasLOS && chaseTimer > 0f)
@@ -421,7 +462,7 @@ namespace Jinn
                 if (!wasBeingBurned)
                 {
                     wasBeingBurned = true;
-                    SetBurningStateClientRpc(true);
+                    SetBurningStateServerRpc(true);
                 }
             }
             else
@@ -429,7 +470,7 @@ namespace Jinn
                 if (wasBeingBurned)
                 {
                     wasBeingBurned = false;
-                    SetBurningStateClientRpc(false);
+                    SetBurningStateServerRpc(false);
                 }
             }
 
@@ -466,12 +507,6 @@ namespace Jinn
                 }
             }
 
-            if (isEnemyDead)
-            {
-                agent.speed = 0f;
-            }
-            else
-            {
                 if (teleportCooldownTimer > 0f)
                 {
                     teleportCooldownTimer -= Time.deltaTime;
@@ -506,31 +541,6 @@ namespace Jinn
                     continuousChaseTimer = 0f;
                     tpRollTimer = 0f;
                 }
-                if (isCurrentlyBurning)
-                {
-                    agent.speed = burnSlowdown;
-                }
-                else if (hasHeardGramophone)
-                {
-                    agent.speed = gramoDash;
-
-                    if (isCloseToTarget || timesinceHearingGramophone > 35f)
-                    {
-                        isCloseToTarget = false;
-                        CancelGramophoneServerRpc();
-                    }
-                }
-                else if (timeSinceLastAttack < 2f)
-                {
-                    agent.speed = attackCooldownSlow;
-                }
-                else
-                {
-                    agent.speed = baseSpeed;
-                }
-
-                syncMovementSpeed = agent.speed;
-            }
         }
 
         public override void DoAIInterval()
@@ -560,7 +570,7 @@ namespace Jinn
                         if (isChasingPitch) SetPitchStateServerRpc(false);
                         CheckAndFireLastDitchTeleport();
 
-                        targetPlayer = null;
+                        SyncTargetServerRpc(-1);
                         if (currentSearch == null || !currentSearch.inProgress) StartSearch(base.transform.position);
                     }
                     else
@@ -607,6 +617,7 @@ namespace Jinn
 
                     if (currentSearch != null && currentSearch.inProgress) StopSearch(currentSearch);
                     SetMovingTowardsTargetPlayer(targetPlayer);
+                    SyncTargetServerRpc((int)targetPlayer.playerClientId);
                 }
                 else if (currentSearch == null || !currentSearch.inProgress)
                 {
@@ -772,7 +783,7 @@ namespace Jinn
                     }
                 }
 
-                GrabbableObject heldItem = player.currentlyHeldObject;
+                GrabbableObject heldItem = player.currentlyHeldObjectServer != null ? player.currentlyHeldObjectServer : player.currentlyHeldObject;
                 if (player.isHoldingObject && heldItem != null && heldItem is FlashlightItem flashlight)
                 {
                     if (flashlight.isBeingUsed && flashlight.insertedBattery != null && flashlight.insertedBattery.charge > 0f)
@@ -783,6 +794,31 @@ namespace Jinn
             }
 
             return false;
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void SyncTargetServerRpc(int playerClientId)
+        {
+            SyncTargetClientRpc(playerClientId);
+        }
+
+        [ClientRpc]
+        public void SyncTargetClientRpc(int playerClientId)
+        {
+            if (playerClientId < 0)
+            {
+                targetPlayer = null;
+            }
+            else
+            {
+                targetPlayer = StartOfRound.Instance.allPlayerScripts[playerClientId];
+            }
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void SetBurningStateServerRpc(bool isBurning)
+        {
+            SetBurningStateClientRpc(isBurning);
         }
 
         [ClientRpc]
@@ -1080,7 +1116,7 @@ namespace Jinn
             {
                 activeFlashlight = pocketLight;
             }
-            else if (localPlayer.currentlyHeldObject != null && localPlayer.currentlyHeldObject is FlashlightItem heldLight)
+            else if ((localPlayer.currentlyHeldObjectServer != null ? localPlayer.currentlyHeldObjectServer : localPlayer.currentlyHeldObject) is FlashlightItem heldLight)
             {
                 activeFlashlight = heldLight;
             }
@@ -1150,7 +1186,6 @@ namespace Jinn
 
         private void UpdateJinnOwnership()
         {
-            if (!IsServer) return;
             if (isEnemyDead) return;
 
             ulong targetOwnerId = 0UL;
@@ -1235,7 +1270,7 @@ namespace Jinn
             if (hasHeardGramophone) return;
             hasHeardGramophone = true;
             timesinceHearingGramophone = 0f;
-            gramoDash = baseSpeed * 2.5f;
+            gramoDash = baseSpeed * gramoDashMult;
             playerWinding = playerClientId;
             PlayerControllerB windingPlayer = StartOfRound.Instance.allPlayerScripts[playerClientId];
             Plugin.Logger.LogInfo($"HearGramophoneClientRpc: playerClientId={playerClientId}, windingPlayer={windingPlayer?.playerUsername}, flyingAudio={(flyingAudio != null)}, flyingClips={(flyingClips != null ? flyingClips.Length.ToString() : "null")}, whooshAudio={(whooshAudio != null)}, whooshSFX={(whooshSFX != null ? whooshSFX.name : "null")}");
@@ -1260,6 +1295,7 @@ namespace Jinn
             if (hasHeardGramophone)
             {
                 hasHeardGramophone = false;
+                targetPlayer = null;
                 LogIfDebugBuild("Gramophone reached");
                 if (IsServer) UpdateJinnOwnership();
             }
