@@ -83,8 +83,7 @@ https://www.youtube.com/watch?v=fLFs9axI2WY
 https://pixabay.com/users/yodguard-12455005/
 - Rapier Model by Jasa P: https://skfb.ly/6C7ZO 
 - Gramophone model by akselmot: https://skfb.ly/ouPHo
+- Ghostly sound effects from Zapsplat: https://www.zapsplat.com/
 
 # Contact / Feedback
 Would love to receive any feedback, clips, suggestions, or bug reports! Feel free to reach out to me on Discord (reikomegalul) or create an issue on the GitHub repository.
-
-Alternatively, feel free to leave feedback in this google form: https://forms.gle/57ERhVN1MzugeHiv9
